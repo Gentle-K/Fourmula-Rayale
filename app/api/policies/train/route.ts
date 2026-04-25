@@ -18,6 +18,18 @@ export async function POST(req: Request) {
 
   if (tasks.length === 0) return new Response(JSON.stringify({ error: "no tasks" }), { status: 400 })
 
+  const taskSet = new Set(tasks.map((t) => t.id))
+  const imitationSamples = Array.from(s.episodes.values())
+    .filter((episode) => taskSet.has(episode.taskId) && episode.interventions?.length)
+    .flatMap((episode) =>
+      episode.interventions!.flatMap((intervention) =>
+        episode.steps
+          .filter((step) => step.t >= intervention.startedAtStep && step.t <= intervention.endedAtStep)
+          .map((step) => step.action),
+      ),
+    )
+    .slice(-240)
+
   const stream = new ReadableStream({
     async start(controller) {
       const send = (obj: unknown) =>
@@ -28,7 +40,12 @@ export async function POST(req: Request) {
       try {
         const trained = clonePolicy(base)
         let last: any = null
-        for (const update of trainCEM(trained, tasks, { iterations, populationSize })) {
+        for (const update of trainCEM(trained, tasks, {
+          iterations,
+          populationSize,
+          imitationSamples,
+          imitationWeight: imitationSamples.length > 0 ? 0.015 : 0,
+        })) {
           last = update
           send({
             type: "iter",
@@ -37,6 +54,7 @@ export async function POST(req: Request) {
             eliteAvg: update.eliteAvg,
             best: update.best,
             successRate: update.successRate,
+            imitationSamples: imitationSamples.length,
           })
         }
         if (last?.bestPolicy) {

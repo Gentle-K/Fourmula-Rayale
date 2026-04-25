@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 import { store, emitAssetEvent } from "@/lib/server-store"
-import { createTextToModelTask, getTaskStatus, extractModelUrl, extractThumbnail, isTerminal } from "@/lib/tripo"
-import type { AssetItem, TargetSpec } from "@/lib/types"
+import { createTextToModelTask, getTaskStatus, extractModelUrl, extractThumbnail, isTerminal, hasTripoKey } from "@/lib/tripo"
+import type { AssetItem, TargetKind } from "@/lib/types"
 import { shortId } from "@/lib/utils"
 
 export const runtime = "nodejs"
@@ -11,8 +11,9 @@ export async function POST(req: Request) {
   const s = store()
   const body = await req.json().catch(() => ({}))
   const prompt: string = (body.prompt ?? "").trim()
-  const kind: TargetSpec["kind"] = body.kind ?? "custom"
+  const kind: TargetKind = body.kind ?? "custom"
   if (!prompt) return NextResponse.json({ error: "prompt required" }, { status: 400 })
+  if (!hasTripoKey()) return NextResponse.json({ error: "TRIPO_API_KEY not set" }, { status: 503 })
 
   const asset: AssetItem = {
     id: "asset_" + shortId(),

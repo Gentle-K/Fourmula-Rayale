@@ -39,6 +39,10 @@ function getKey() {
   return k
 }
 
+export function hasTripoKey() {
+  return Boolean(process.env.TRIPO_API_KEY?.trim())
+}
+
 export async function createTextToModelTask(prompt: string): Promise<string> {
   const res = await fetch(`${BASE}/task`, {
     method: "POST",

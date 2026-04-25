@@ -5,8 +5,9 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
 import { fmt } from "@/lib/utils"
+import { clonePolicy, emptyPolicy, trainCEM } from "@/lib/policy"
 import { Brain, Loader2, Sparkles } from "lucide-react"
-import type { Policy } from "@/lib/types"
+import type { Policy, TaskSpec } from "@/lib/types"
 
 type Update = { iter: number; total: number; eliteAvg: number; best: number; successRate: number }
 
@@ -17,12 +18,14 @@ export function LearnMode() {
   const setActivePolicy = useHabitat((s) => s.setActivePolicy)
   const tasks = useHabitat((s) => s.tasks)
   const activeTaskId = useHabitat((s) => s.activeTaskId)
+  const episodes = useHabitat((s) => s.episodes)
 
   const [training, setTraining] = useState(false)
   const [history, setHistory] = useState<Update[]>([])
   const [iterations, setIterations] = useState(12)
   const [population, setPopulation] = useState(16)
   const [taskMode, setTaskMode] = useState<"current" | "all">("current")
+  const [error, setError] = useState<string | null>(null)
 
   const activePolicy = policies.find((p) => p.id === activePolicyId)
 
@@ -30,6 +33,7 @@ export function LearnMode() {
     if (training) return
     setTraining(true)
     setHistory([])
+    setError(null)
     const taskIds =
       taskMode === "current" && activeTaskId ? [activeTaskId] : tasks.slice(0, 4).map((t) => t.id)
     try {
@@ -43,10 +47,15 @@ export function LearnMode() {
           populationSize: population,
         }),
       })
+      if (!res.ok) {
+        const msg = await res.text().catch(() => "")
+        throw new Error(msg || `Training request failed (${res.status})`)
+      }
       const reader = res.body?.getReader()
+      if (!reader) throw new Error("Training stream is unavailable")
       const dec = new TextDecoder()
       let buf = ""
-      while (reader) {
+      while (true) {
         const { value, done } = await reader.read()
         if (done) break
         buf += dec.decode(value, { stream: true })
@@ -55,28 +64,37 @@ export function LearnMode() {
         for (const part of parts) {
           const line = part.replace(/^data:\s*/, "").trim()
           if (!line) continue
+          let evt: any
           try {
-            const evt = JSON.parse(line)
-            if (evt.type === "iter") {
-              const u: Update = {
-                iter: evt.iter,
-                total: evt.total,
-                eliteAvg: evt.eliteAvg,
-                best: evt.best,
-                successRate: evt.successRate,
-              }
-              setHistory((h) => [...h, u])
-            } else if (evt.type === "done" && evt.policy) {
-              const p = evt.policy as Policy
-              upsertPolicy(p)
-              setActivePolicy(p.id)
-            } else if (evt.type === "error") {
-              console.log("[v0] train error:", evt.error)
-            }
+            evt = JSON.parse(line)
           } catch {
-            // ignore
+            continue
+          }
+          if (evt.type === "iter") {
+            const u: Update = {
+              iter: evt.iter,
+              total: evt.total,
+              eliteAvg: evt.eliteAvg,
+              best: evt.best,
+              successRate: evt.successRate,
+            }
+            setHistory((h) => [...h, u])
+          } else if (evt.type === "done" && evt.policy) {
+            const p = evt.policy as Policy
+            upsertPolicy(p)
+            setActivePolicy(p.id)
+          } else if (evt.type === "error") {
+            throw new Error(evt.error ?? "Training failed")
           }
         }
+      }
+    } catch (err: any) {
+      const fallbackMessage = err?.message ?? "Training API unavailable"
+      setError(`${fallbackMessage}；已切换为浏览器本地 CEM 训练。`)
+      try {
+        await runLocalTrain(taskIds)
+      } catch (fallbackErr: any) {
+        setError(`${fallbackMessage}；本地训练也失败：${fallbackErr?.message ?? "unknown error"}`)
       }
     } finally {
       setTraining(false)
@@ -84,11 +102,76 @@ export function LearnMode() {
   }
 
   const newPolicy = async () => {
-    const r = await fetch("/api/policies", { method: "POST", body: JSON.stringify({}) })
-    const j = await r.json()
-    if (j.policy) {
-      upsertPolicy(j.policy)
-      setActivePolicy(j.policy.id)
+    setError(null)
+    try {
+      const r = await fetch("/api/policies", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      })
+      if (!r.ok) {
+        const msg = await r.text().catch(() => "")
+        throw new Error(msg || `Policy request failed (${r.status})`)
+      }
+      const j = await r.json()
+      if (j.policy) {
+        upsertPolicy(j.policy)
+        setActivePolicy(j.policy.id)
+        return
+      }
+      throw new Error("Policy API returned no policy")
+    } catch (err: any) {
+      const p = emptyPolicy()
+      upsertPolicy(p)
+      setActivePolicy(p.id)
+      setError(`${err?.message ?? "Policy API unavailable"}；已在浏览器本地创建策略。`)
+    }
+  }
+
+  const runLocalTrain = async (taskIds: string[]) => {
+    const selectedTasks: TaskSpec[] = (taskIds.length ? taskIds : tasks.slice(0, 4).map((task) => task.id))
+      .map((id) => tasks.find((task) => task.id === id))
+      .filter((task): task is TaskSpec => Boolean(task))
+    if (selectedTasks.length === 0) throw new Error("没有可训练任务")
+
+    const base = activePolicy ? clonePolicy(activePolicy) : emptyPolicy()
+    const taskSet = new Set(selectedTasks.map((task) => task.id))
+    const imitationSamples = episodes
+      .filter((episode) => taskSet.has(episode.taskId) && episode.interventions?.length)
+      .flatMap((episode) =>
+        episode.interventions!.flatMap((intervention) =>
+          episode.steps
+            .filter((step) => step.t >= intervention.startedAtStep && step.t <= intervention.endedAtStep)
+            .map((step) => step.action),
+        ),
+      )
+      .slice(-240)
+
+    let trained: Policy | null = null
+    for (const update of trainCEM(base, selectedTasks, {
+      iterations,
+      populationSize: population,
+      imitationSamples,
+      imitationWeight: imitationSamples.length > 0 ? 0.015 : 0,
+    })) {
+      const u: Update = {
+        iter: update.iter,
+        total: update.total,
+        eliteAvg: update.eliteAvg,
+        best: update.best,
+        successRate: update.successRate,
+      }
+      setHistory((h) => [...h, u])
+      trained = update.bestPolicy as Policy
+      await new Promise((resolve) => window.setTimeout(resolve, 0))
+    }
+
+    if (trained) {
+      trained.taskFamily = selectedTasks.map((task) => task.id)
+      trained.iterations = (activePolicy?.iterations ?? 0) + iterations
+      trained.updatedAt = Date.now()
+      upsertPolicy(trained)
+      setActivePolicy(trained.id)
     }
   }
 
@@ -120,6 +203,12 @@ export function LearnMode() {
           </button>
         </div>
       </div>
+
+      {error && (
+        <div className="rounded-md border border-accent/40 bg-accent/10 px-3 py-2 text-xs text-accent">
+          {error}
+        </div>
+      )}
 
       <div className="grid grid-cols-3 gap-2">
         <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wider text-muted-foreground">

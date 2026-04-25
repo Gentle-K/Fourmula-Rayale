@@ -1,7 +1,17 @@
 "use client"
 
 import { create } from "zustand"
-import type { Action, AssetItem, ControlMode, Episode, Policy, StepRecord, TaskSpec } from "./types"
+import type {
+  Action,
+  AssetItem,
+  ControlMode,
+  Episode,
+  InterventionEvent,
+  ScenePhase,
+  StepRecord,
+  Policy,
+  TaskSpec,
+} from "./types"
 import { initSim, stepSim, buildFeatures, type SimState } from "./simulator"
 import { policyAct } from "./policy"
 import { shortId } from "./utils"
@@ -19,9 +29,23 @@ type State = {
   activePolicyId: string | null
   mode: ControlMode
   // runtime
+  scenePhase: ScenePhase
   sim: SimState | null
   steps: StepRecord[]
   runState: RunState
+  robotAssetId: string | null
+  intervention: {
+    active: boolean
+    reason: string | null
+    startedAtStep: number | null
+  }
+  interventions: InterventionEvent[]
+  deadlock: {
+    active: boolean
+    staleSteps: number
+    bestReward: number
+    lastImprovementStep: number
+  }
   // replay
   replayIndex: number
   replayEpisodeId: string | null
@@ -50,6 +74,12 @@ type State = {
   setActivePolicy: (id: string | null) => void
   setMode: (m: ControlMode) => void
   setManual: (a: Partial<Action>) => void
+  enterHabitat: () => void
+  returnToOrbit: () => void
+  applyRobotAsset: (assetId: string) => void
+  insertAssetAsTask: (assetId: string, taskPreset?: "dock" | "grasp" | "open-cap" | "inspect") => Promise<void>
+  beginIntervention: (reason: string) => void
+  endIntervention: () => void
   startRun: () => void
   pauseRun: () => void
   resumeRun: () => void
@@ -70,9 +100,14 @@ export const useHabitat = create<State>((set, get) => ({
   activeTaskId: null,
   activePolicyId: null,
   mode: "manual",
+  scenePhase: "orbit",
   sim: null,
   steps: [],
   runState: "idle",
+  robotAssetId: null,
+  intervention: { active: false, reason: null, startedAtStep: null },
+  interventions: [],
+  deadlock: { active: false, staleSteps: 0, bestReward: -Infinity, lastImprovementStep: 0 },
   replayIndex: 0,
   replayEpisodeId: null,
   trainingProgress: null,
@@ -104,12 +139,88 @@ export const useHabitat = create<State>((set, get) => ({
   setActivePolicy: (id) => set({ activePolicyId: id }),
   setMode: (m) => set({ mode: m, runState: "idle", sim: null, steps: [], replayIndex: 0 }),
   setManual: (a) => set((s) => ({ manualInput: { ...s.manualInput, ...a } })),
+  enterHabitat: () => {
+    set({ scenePhase: "transitioning" })
+    window.setTimeout(() => {
+      useHabitat.setState({ scenePhase: "habitat" })
+    }, 850)
+  },
+  returnToOrbit: () =>
+    set({
+      scenePhase: "orbit",
+      runState: "idle",
+      sim: null,
+      steps: [],
+      replayIndex: 0,
+      replayEpisodeId: null,
+      intervention: { active: false, reason: null, startedAtStep: null },
+    }),
+  applyRobotAsset: (assetId) => {
+    const asset = get().assets.find((a) => a.id === assetId)
+    if (!asset || asset.kind !== "robot" || asset.status !== "succeeded" || !asset.modelUrl) return
+    set({ robotAssetId: assetId })
+  },
+  insertAssetAsTask: async (assetId, taskPreset = "dock") => {
+    const asset = get().assets.find((a) => a.id === assetId)
+    if (!asset || asset.kind === "robot" || asset.status !== "succeeded" || !asset.modelUrl) return
+    const res = await fetch("/api/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        assetId,
+        taskPreset,
+        difficulty: 0.45,
+        name: asset.prompt.slice(0, 18),
+      }),
+    }).then((r) => r.json())
+    if (res.task) {
+      get().addTask(res.task)
+      get().setActiveTask(res.task.id)
+      get().enterHabitat()
+    }
+  },
+  beginIntervention: (reason) => {
+    const s = get()
+    if (!s.sim || s.runState !== "running") return
+    set({ intervention: { active: true, reason, startedAtStep: s.sim.step } })
+  },
+  endIntervention: () => {
+    const s = get()
+    if (!s.intervention.active) return
+    const startedAtStep = s.intervention.startedAtStep ?? s.sim?.step ?? 0
+    const endedAtStep = s.sim?.step ?? startedAtStep
+    const slice = s.steps.filter((step) => step.t >= startedAtStep && step.t <= endedAtStep)
+    const event: InterventionEvent = {
+      id: "iv_" + shortId(),
+      reason: s.intervention.reason ?? "assist",
+      startedAtStep,
+      endedAtStep,
+      durationSteps: Math.max(0, endedAtStep - startedAtStep),
+      taskId: s.sim?.task.id,
+      targetId: s.sim?.task.target.id,
+      actions: slice.map((step) => step.action),
+      targetPositions: slice.map((step) => step.targetPos),
+      createdAt: Date.now(),
+    }
+    set((cur) => ({
+      intervention: { active: false, reason: null, startedAtStep: null },
+      interventions: [...cur.interventions, event],
+      deadlock: { ...cur.deadlock, active: false, staleSteps: 0, lastImprovementStep: endedAtStep },
+    }))
+  },
 
   startRun: () => {
     const s = get()
     const task = s.tasks.find((t) => t.id === s.activeTaskId)
     if (!task) return
-    set({ sim: initSim(task, Date.now() & 0xffff), steps: [], runState: "running" })
+    set({
+      sim: initSim(task, Date.now() & 0xffff),
+      steps: [],
+      runState: "running",
+      interventions: [],
+      intervention: { active: false, reason: null, startedAtStep: null },
+      deadlock: { active: false, staleSteps: 0, bestReward: -Infinity, lastImprovementStep: 0 },
+    })
   },
   pauseRun: () => set({ runState: "paused" }),
   resumeRun: () => set({ runState: "running" }),
@@ -121,13 +232,23 @@ export const useHabitat = create<State>((set, get) => ({
     }
     finalizeEpisode()
   },
-  resetRun: () => set({ sim: null, steps: [], runState: "idle", replayIndex: 0, replayEpisodeId: null }),
+  resetRun: () =>
+    set({
+      sim: null,
+      steps: [],
+      runState: "idle",
+      replayIndex: 0,
+      replayEpisodeId: null,
+      interventions: [],
+      intervention: { active: false, reason: null, startedAtStep: null },
+      deadlock: { active: false, staleSteps: 0, bestReward: -Infinity, lastImprovementStep: 0 },
+    }),
 
   tickManual: () => {
     const s = get()
     if (!s.sim || s.runState !== "running") return
     const { state, record } = stepSim(s.sim, s.manualInput)
-    set({ sim: state, steps: [...s.steps, record] })
+    set({ sim: state, steps: [...s.steps, record], deadlock: updateDeadlock(s.deadlock, state) })
     if (state.done) finalizeEpisode()
   },
 
@@ -135,11 +256,11 @@ export const useHabitat = create<State>((set, get) => ({
     const s = get()
     if (!s.sim || s.runState !== "running") return
     const policy = s.policies.find((p) => p.id === s.activePolicyId)
-    if (!policy) return
+    if (!policy && !s.intervention.active) return
     const f = buildFeatures(s.sim)
-    const a = policyAct(policy, f)
+    const a = s.intervention.active || !policy ? s.manualInput : policyAct(policy, f)
     const { state, record } = stepSim(s.sim, a)
-    set({ sim: state, steps: [...s.steps, record] })
+    set({ sim: state, steps: [...s.steps, record], deadlock: updateDeadlock(s.deadlock, state) })
     if (state.done) finalizeEpisode()
   },
 
@@ -157,6 +278,9 @@ export const useHabitat = create<State>((set, get) => ({
       replayEpisodeId: episodeId,
       mode: "replay",
       activeTaskId: task.id,
+      scenePhase: "habitat",
+      interventions: ep.interventions ?? [],
+      intervention: { active: false, reason: null, startedAtStep: null },
     })
   },
 
@@ -172,7 +296,7 @@ export const useHabitat = create<State>((set, get) => ({
     }
     const action = ep.steps[i].action
     const { state, record } = stepSim(s.sim, action)
-    set({ sim: state, steps: [...s.steps, record], replayIndex: i + 1 })
+    set({ sim: state, steps: [...s.steps, record], replayIndex: i + 1, deadlock: updateDeadlock(s.deadlock, state) })
     if (state.done) set({ runState: "completed" })
     return true
   },
@@ -188,6 +312,24 @@ function finalizeEpisode() {
   }
   const task = s.sim.task
   const policy = s.policies.find((p) => p.id === s.activePolicyId)
+  const interventions = [...s.interventions]
+  if (s.intervention.active) {
+    const startedAtStep = s.intervention.startedAtStep ?? s.sim.step
+    const endedAtStep = s.sim.step
+    const slice = s.steps.filter((step) => step.t >= startedAtStep && step.t <= endedAtStep)
+    interventions.push({
+      id: "iv_" + shortId(),
+      reason: s.intervention.reason ?? "assist",
+      startedAtStep,
+      endedAtStep,
+      durationSteps: Math.max(0, endedAtStep - startedAtStep),
+      taskId: task.id,
+      targetId: task.target.id,
+      actions: slice.map((step) => step.action),
+      targetPositions: slice.map((step) => step.targetPos),
+      createdAt: Date.now(),
+    })
+  }
   const ep: Episode = {
     id: "ep_" + shortId(),
     taskId: task.id,
@@ -200,12 +342,35 @@ function finalizeEpisode() {
     energyUsed: s.sim.agent.energyUsed,
     createdAt: Date.now(),
     policyId: policy?.id,
+    interventions,
   }
-  useHabitat.setState({ runState: "completed", episodes: [ep, ...s.episodes].slice(0, 200) })
+  useHabitat.setState({
+    runState: "completed",
+    episodes: [ep, ...s.episodes].slice(0, 200),
+    interventions,
+    intervention: { active: false, reason: null, startedAtStep: null },
+  })
   // Persist to server in the background
   fetch("/api/episodes", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(ep),
   }).catch(() => {})
+}
+
+function updateDeadlock(current: State["deadlock"], sim: SimState): State["deadlock"] {
+  if (sim.totalReward > current.bestReward + 0.04) {
+    return {
+      active: false,
+      staleSteps: 0,
+      bestReward: sim.totalReward,
+      lastImprovementStep: sim.step,
+    }
+  }
+  const staleSteps = Math.max(0, sim.step - current.lastImprovementStep)
+  return {
+    ...current,
+    staleSteps,
+    active: staleSteps >= 80 && !sim.done,
+  }
 }

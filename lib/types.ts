@@ -1,5 +1,9 @@
 export type Vec3 = [number, number, number]
 
+export type ScenePhase = "orbit" | "transitioning" | "habitat"
+
+export type TargetKind = "panel" | "tool" | "module" | "custom" | "robot" | "prop"
+
 export type Action = {
   // 6-DOF arm command, normalized [-1, 1]
   base: number // base rotation
@@ -18,9 +22,60 @@ export type AgentState = {
   energyUsed: number
 }
 
+export type RobotJointState = {
+  root: {
+    position: Vec3
+    rotation: Vec3
+  }
+  torso: {
+    pitch: number
+    yaw: number
+    roll: number
+  }
+  head: {
+    pitch: number
+    yaw: number
+  }
+  leftArm: {
+    shoulder: Vec3
+    elbow: number
+    wrist: Vec3
+    grip: number
+  }
+  rightArm: {
+    shoulder: Vec3
+    elbow: number
+    wrist: Vec3
+    grip: number
+  }
+  leftLeg: {
+    hip: Vec3
+    knee: number
+    ankle: Vec3
+  }
+  rightLeg: {
+    hip: Vec3
+    knee: number
+    ankle: Vec3
+  }
+}
+
+export type InterventionEvent = {
+  id: string
+  reason: string
+  startedAtStep: number
+  endedAtStep: number
+  durationSteps: number
+  taskId?: string
+  targetId?: string
+  actions: Action[]
+  targetPositions: Vec3[]
+  createdAt: number
+}
+
 export type TargetSpec = {
   id: string
-  kind: "panel" | "tool" | "module" | "custom"
+  kind: TargetKind
   name: string
   initial: Vec3
   goal: Vec3
@@ -69,6 +124,7 @@ export type Episode = {
   energyUsed: number
   createdAt: number
   policyId?: string
+  interventions?: InterventionEvent[]
 }
 
 export type ControlMode = "manual" | "replay" | "learn" | "auto" | "curriculum"
@@ -100,7 +156,7 @@ export type AssetItem = {
   taskId?: string // tripo task id
   createdAt: number
   error?: string
-  kind: TargetSpec["kind"]
+  kind: TargetKind
 }
 
 export type GenerationEvent =

@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react"
 import { useHabitat } from "@/lib/store"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Pause, Play, Square, Repeat } from "lucide-react"
+import { Hand, Pause, Play, Square, Repeat } from "lucide-react"
 
 export function AutoMode() {
   const policies = useHabitat((s) => s.policies)
@@ -15,6 +15,10 @@ export function AutoMode() {
   const resumeRun = useHabitat((s) => s.resumeRun)
   const stopRun = useHabitat((s) => s.stopRun)
   const sim = useHabitat((s) => s.sim)
+  const deadlock = useHabitat((s) => s.deadlock)
+  const intervention = useHabitat((s) => s.intervention)
+  const beginIntervention = useHabitat((s) => s.beginIntervention)
+  const endIntervention = useHabitat((s) => s.endIntervention)
   const [autoLoop, setAutoLoop] = useState(false)
   const loopRef = useRef(false)
   loopRef.current = autoLoop
@@ -65,6 +69,15 @@ export function AutoMode() {
           <Repeat className="h-3.5 w-3.5" />
           循环 {autoLoop ? "ON" : "OFF"}
         </Button>
+        <Button
+          size="sm"
+          variant={intervention.active || deadlock.active ? "accent" : "outline"}
+          onClick={() => (intervention.active ? endIntervention() : beginIntervention(deadlock.active ? "deadlock" : "user-assist"))}
+          disabled={runState !== "running"}
+        >
+          <Hand className="h-3.5 w-3.5" />
+          {intervention.active ? "结束纠错" : deadlock.active ? "纠错建议" : "辅助纠错"}
+        </Button>
       </div>
 
       <div className="rounded-md border border-border bg-card/50 p-3">
@@ -99,6 +112,12 @@ export function AutoMode() {
             <div className="text-[10px] uppercase tracking-wider text-muted-foreground">能耗</div>
             <div className="text-base">{sim.agent.energyUsed.toFixed(2)}</div>
           </div>
+        </div>
+      )}
+
+      {deadlock.active && !intervention.active && (
+        <div className="rounded-md border border-accent/40 bg-accent/10 p-3 text-xs text-accent">
+          reward 已连续 {deadlock.staleSteps} 步无明显提升。可点击“纠错建议”，用手动输入接管若干步并写入示范片段。
         </div>
       )}
 

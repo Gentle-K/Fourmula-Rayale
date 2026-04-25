@@ -1,11 +1,13 @@
-import type { TargetSpec, TaskSpec, Vec3 } from "./types"
+import type { TargetKind, TargetSpec, TaskSpec, Vec3 } from "./types"
 import { shortId } from "./utils"
 
-const KIND_NAMES: Record<TargetSpec["kind"], string[]> = {
+const KIND_NAMES: Record<TargetKind, string[]> = {
   panel: ["散热面板", "太阳能板", "维修面板", "导航面板"],
   tool: ["扳手", "焊枪", "传感器", "维修工具"],
   module: ["实验舱模块", "电池模块", "对接模块", "通讯模块"],
   custom: ["生成体", "未知物体", "实验载荷"],
+  robot: ["机器人外观", "维修机器人", "助手机器人"],
+  prop: ["水杯", "样品容器", "开盖载具", "训练道具"],
 }
 
 const COLORS = ["#22d3ee", "#f59e0b", "#a78bfa", "#34d399", "#f472b6", "#fb923c"]
@@ -19,22 +21,25 @@ function pick<T>(arr: T[]): T {
 
 export function generateTask(opts: {
   difficulty?: number
-  kind?: TargetSpec["kind"]
+  kind?: TargetKind
   modelUrl?: string
   prompt?: string
   name?: string
+  taskPreset?: "dock" | "grasp" | "open-cap" | "inspect"
+  initial?: Vec3
+  goal?: Vec3
 } = {}): TaskSpec {
   const difficulty = opts.difficulty ?? Math.random() * 0.8 + 0.1
-  const kind = opts.kind ?? (pick(["panel", "tool", "module"]) as TargetSpec["kind"])
+  const kind = opts.kind ?? (pick(["panel", "tool", "module", "prop"]) as TargetKind)
   const baseName = pick(KIND_NAMES[kind])
 
   // initial position somewhere in cabin, goal at a docking slot
-  const initial: Vec3 = [
+  const initial: Vec3 = opts.initial ?? [
     rand(-1.6, 1.6),
     rand(0.6, 2.0),
     rand(-1.6, 1.6),
   ]
-  const goal: Vec3 = [
+  const goal: Vec3 = opts.goal ?? [
     rand(-2.2, 2.2),
     rand(0.4, 1.8),
     rand(-2.2, 2.2),
@@ -61,10 +66,19 @@ export function generateTask(opts: {
     prompt: opts.prompt,
   }
 
+  const presetName =
+    opts.taskPreset === "grasp"
+      ? "抓取"
+      : opts.taskPreset === "open-cap"
+        ? "开盖"
+        : opts.taskPreset === "inspect"
+          ? "巡检"
+          : "对接"
+
   const task: TaskSpec = {
     id: "task_" + shortId(),
-    name: `${baseName} 对接`,
-    description: `将 ${baseName} 从初始位置抓取并稳定对接到目标位置。难度 ${difficulty.toFixed(2)}。`,
+    name: `${opts.name ?? baseName} ${presetName}`,
+    description: `将 ${opts.name ?? baseName} 完成${presetName}训练动作。难度 ${difficulty.toFixed(2)}。`,
     difficulty,
     target,
     maxSteps: Math.round(180 + difficulty * 220),

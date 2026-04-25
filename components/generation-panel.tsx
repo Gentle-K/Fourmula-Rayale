@@ -7,11 +7,11 @@ import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
 import { Textarea } from "@/components/ui/input"
 import { Loader2, Sparkles, Box, AlertCircle } from "lucide-react"
-import type { AssetItem, TargetSpec } from "@/lib/types"
+import type { AssetItem, TargetKind } from "@/lib/types"
 
 const fetcher = (u: string) => fetch(u).then((r) => r.json())
 
-const PRESETS: { kind: TargetSpec["kind"]; prompt: string; label: string }[] = [
+const PRESETS: { kind: TargetKind; prompt: string; label: string }[] = [
   {
     kind: "panel",
     prompt: "白色金属航天器维修面板，带蓝色LED指示灯，低多边形，PBR材质",
@@ -27,27 +27,43 @@ const PRESETS: { kind: TargetSpec["kind"]; prompt: string; label: string }[] = [
     prompt: "立方形航天器实验载荷模块，金属外壳，散热鳍片，标识贴纸",
     label: "载荷模块",
   },
+  {
+    kind: "prop",
+    prompt: "low-poly space water cup with removable cap, white polymer body, blue gasket, PBR material",
+    label: "水杯开盖",
+  },
+  {
+    kind: "robot",
+    prompt: "modular friendly space maintenance robot shell, separated armor plates, white and cyan, lightweight humanoid proportions, PBR",
+    label: "机器人外观",
+  },
 ]
 
 export function GenerationPanel() {
   const assets = useHabitat((s) => s.assets)
   const setAssets = useHabitat((s) => s.setAssets)
   const upsertAsset = useHabitat((s) => s.upsertAsset)
-  const addTask = useHabitat((s) => s.addTask)
-  const setActiveTask = useHabitat((s) => s.setActiveTask)
+  const applyRobotAsset = useHabitat((s) => s.applyRobotAsset)
+  const insertAssetAsTask = useHabitat((s) => s.insertAssetAsTask)
 
   const [prompt, setPrompt] = useState(PRESETS[0].prompt)
-  const [kind, setKind] = useState<TargetSpec["kind"]>("panel")
+  const [kind, setKind] = useState<TargetKind>("panel")
   const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  const { data } = useSWR<{ assets: AssetItem[] }>("/api/assets", fetcher, { refreshInterval: 8000 })
+  const { data } = useSWR<{ assets: AssetItem[]; tripoReady: boolean }>("/api/assets", fetcher, { refreshInterval: 8000 })
   useEffect(() => {
     if (data?.assets) setAssets(data.assets)
   }, [data]) // eslint-disable-line
 
   const submit = async () => {
     if (!prompt.trim() || submitting) return
+    if (data && !data.tripoReady) {
+      setError("TRIPO_API_KEY 未配置。当前设置为真实 Tripo3D 模式，不能使用本地假模型兜底。")
+      return
+    }
     setSubmitting(true)
+    setError(null)
     try {
       const r = await fetch("/api/tripo/generate", {
         method: "POST",
@@ -55,12 +71,17 @@ export function GenerationPanel() {
         body: JSON.stringify({ prompt, kind }),
       })
       const j = await r.json()
+      if (!r.ok) {
+        setError(j.error ?? "Tripo3D 提交失败")
+        return
+      }
       if (j.asset) {
         upsertAsset(j.asset)
         subscribe(j.asset.id)
       }
     } catch (e) {
       console.log("[v0] generation failed:", e)
+      setError("Tripo3D 请求失败")
     } finally {
       setSubmitting(false)
     }
@@ -108,21 +129,11 @@ export function GenerationPanel() {
 
   const useAsTask = async (a: AssetItem) => {
     if (!a.modelUrl) return
-    const r = await fetch("/api/tasks", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        kind: a.kind,
-        modelUrl: a.modelUrl,
-        prompt: a.prompt,
-        name: a.prompt.slice(0, 14),
-        difficulty: 0.45,
-      }),
-    }).then((x) => x.json())
-    if (r.task) {
-      addTask(r.task)
-      setActiveTask(r.task.id)
+    if (a.kind === "robot") {
+      applyRobotAsset(a.id)
+      return
     }
+    await insertAssetAsTask(a.id, a.kind === "prop" ? "open-cap" : "dock")
   }
 
   return (
@@ -138,12 +149,14 @@ export function GenerationPanel() {
         <div className="flex flex-wrap items-center gap-2">
           <select
             value={kind}
-            onChange={(e) => setKind(e.target.value as TargetSpec["kind"])}
+            onChange={(e) => setKind(e.target.value as TargetKind)}
             className="h-8 rounded-md border border-input bg-secondary/40 px-2 text-xs"
           >
             <option value="panel">面板</option>
             <option value="tool">工具</option>
             <option value="module">模块</option>
+            <option value="prop">训练物品</option>
+            <option value="robot">机器人外观</option>
             <option value="custom">自定义</option>
           </select>
           {PRESETS.map((p) => (
@@ -163,6 +176,16 @@ export function GenerationPanel() {
             提交生成
           </Button>
         </div>
+        {error && (
+          <div className="rounded-md border border-destructive/50 bg-destructive/10 px-2.5 py-2 text-xs text-destructive">
+            {error}
+          </div>
+        )}
+        {data && !data.tripoReady && (
+          <div className="rounded-md border border-accent/40 bg-accent/10 px-2.5 py-2 text-xs text-accent">
+            真实 Tripo3D 模式需要服务端配置 TRIPO_API_KEY；未配置时不会生成本地假资产。
+          </div>
+        )}
       </div>
 
       <div className="flex-1 overflow-auto scrollbar-thin">
@@ -216,7 +239,7 @@ export function GenerationPanel() {
                 {a.status === "succeeded" && (
                   <div className="mt-2 flex items-center gap-2">
                     <Button size="sm" variant="outline" onClick={() => useAsTask(a)}>
-                      作为任务目标
+                      {a.kind === "robot" ? "应用机器人外观" : "插入场景训练"}
                     </Button>
                     <a
                       href={a.modelUrl}

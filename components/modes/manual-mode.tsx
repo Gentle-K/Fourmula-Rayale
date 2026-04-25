@@ -3,7 +3,7 @@ import { useEffect } from "react"
 import { useHabitat } from "@/lib/store"
 import { Slider } from "@/components/ui/slider"
 import { Button } from "@/components/ui/button"
-import { Pause, Play, RotateCcw, Square } from "lucide-react"
+import { Hand, Pause, Play, RotateCcw, Square } from "lucide-react"
 
 export function ManualMode() {
   const manual = useHabitat((s) => s.manualInput)
@@ -14,6 +14,9 @@ export function ManualMode() {
   const resumeRun = useHabitat((s) => s.resumeRun)
   const stopRun = useHabitat((s) => s.stopRun)
   const resetRun = useHabitat((s) => s.resetRun)
+  const intervention = useHabitat((s) => s.intervention)
+  const beginIntervention = useHabitat((s) => s.beginIntervention)
+  const endIntervention = useHabitat((s) => s.endIntervention)
 
   // Keyboard hints (decay manual input slightly when keys released)
   useEffect(() => {
@@ -59,6 +62,15 @@ export function ManualMode() {
         <Button size="sm" variant="ghost" onClick={resetRun}>
           <RotateCcw className="h-3.5 w-3.5" />
           重置
+        </Button>
+        <Button
+          size="sm"
+          variant={intervention.active ? "accent" : "outline"}
+          onClick={() => (intervention.active ? endIntervention() : beginIntervention("manual-correction"))}
+          disabled={runState !== "running"}
+        >
+          <Hand className="h-3.5 w-3.5" />
+          {intervention.active ? "结束纠错" : "记录纠错"}
         </Button>
       </div>
 

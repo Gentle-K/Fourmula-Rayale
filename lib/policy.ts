@@ -59,9 +59,12 @@ export function rolloutTask(
   task: TaskSpec,
   seed = 1,
   noise = 0,
+  imitationSamples: Action[] = [],
+  imitationWeight = 0,
 ): { totalReward: number; success: boolean; steps: number } {
   let s = initSim(task, seed)
   let success = false
+  let imitationPenalty = 0
   while (!s.done) {
     const f = buildFeatures(s)
     const a = policyAct(policy, f)
@@ -72,11 +75,15 @@ export function rolloutTask(
       a.wrist += (Math.random() - 0.5) * 2 * noise
       a.thrust += (Math.random() - 0.5) * 2 * noise
     }
+    if (imitationSamples.length > 0 && imitationWeight > 0) {
+      const guide = imitationSamples[s.step % imitationSamples.length]
+      imitationPenalty += actionDistance(a, guide) * imitationWeight
+    }
     const r = stepSim(s, a)
     s = r.state
     if (s.success) success = true
   }
-  return { totalReward: s.totalReward, success, steps: s.step }
+  return { totalReward: s.totalReward - imitationPenalty, success, steps: s.step }
 }
 
 // Cross-Entropy Method (CEM) for the linear policy.
@@ -91,6 +98,8 @@ export function* trainCEM(
     eliteFrac?: number
     sigma?: number
     seed?: number
+    imitationSamples?: Action[]
+    imitationWeight?: number
   } = {},
 ) {
   const iterations = opts.iterations ?? 12
@@ -115,7 +124,14 @@ export function* trainCEM(
       let totalFit = 0
       let succ = 0
       for (let k = 0; k < tasks.length; k++) {
-        const r = rolloutTask(policy, tasks[k], (opts.seed ?? 1) + iter * 1000 + k)
+        const r = rolloutTask(
+          policy,
+          tasks[k],
+          (opts.seed ?? 1) + iter * 1000 + k,
+          0,
+          opts.imitationSamples,
+          opts.imitationWeight ?? 0,
+        )
         totalFit += r.totalReward
         if (r.success) succ++
       }
@@ -154,6 +170,17 @@ export function* trainCEM(
       bestPolicy,
     }
   }
+}
+
+function actionDistance(a: Action, b: Action): number {
+  return (
+    Math.abs(a.base - b.base) +
+    Math.abs(a.shoulder - b.shoulder) +
+    Math.abs(a.elbow - b.elbow) +
+    Math.abs(a.wrist - b.wrist) +
+    Math.abs(a.grip - b.grip) +
+    Math.abs(a.thrust - b.thrust)
+  )
 }
 
 function gaussian() {

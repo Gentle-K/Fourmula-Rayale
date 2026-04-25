@@ -1,7 +1,7 @@
 "use client"
-import { Stars } from "@react-three/drei"
 import { useMemo } from "react"
 import * as THREE from "three"
+import { StarField } from "./star-field"
 
 export function IssEnvironment() {
   // module ribs
@@ -9,7 +9,7 @@ export function IssEnvironment() {
   return (
     <group>
       {/* Outer space backdrop */}
-      <Stars radius={120} depth={60} count={2500} factor={4} fade speed={0.5} />
+      <StarField radius={105} depth={58} count={1800} speed={0.014} />
       <fog attach="fog" args={["#0a1020", 12, 28]} />
 
       {/* Cabin shell: cylinder along Z */}

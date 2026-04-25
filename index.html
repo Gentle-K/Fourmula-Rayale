@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Doctor WebXR Robot Trainer</title>
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="xr-canvas"></canvas>
+      <section id="hud" aria-label="Doctor robot training status">
+        <header class="hud-header">
+          <div>
+            <p class="eyebrow">WebXR embodied AI prototype</p>
+            <h1>Doctor Bone Control Lab</h1>
+          </div>
+          <div class="mode-pill" id="mode-pill">manual</div>
+        </header>
+
+        <div class="hud-grid">
+          <div class="panel">
+            <h2>Status</h2>
+            <dl>
+              <div>
+                <dt>Phase</dt>
+                <dd id="phase-value">orbit</dd>
+              </div>
+              <div>
+                <dt>Habitat</dt>
+                <dd id="habitat-value">JPM</dd>
+              </div>
+              <div>
+                <dt>Mode</dt>
+                <dd id="mode-value">manual</dd>
+              </div>
+              <div>
+                <dt>Selected joint</dt>
+                <dd id="selected-joint">none</dd>
+              </div>
+              <div>
+                <dt>Samples</dt>
+                <dd id="sample-count">0</dd>
+              </div>
+              <div>
+                <dt>Train best</dt>
+                <dd id="train-best">not run</dd>
+              </div>
+            </dl>
+          </div>
+
+          <div class="panel">
+            <h2>Controls</h2>
+            <p id="scene-hint" class="scene-hint">Loading ISS station model...</p>
+            <p>1 manual · 2 agent · 3 record · 4 train step</p>
+            <p>H orbit · S export demo · R reset · P print observation</p>
+            <p>In VR: point at handles to teach joints, or point at the floor zone to telepoint.</p>
+          </div>
+
+          <div class="panel joint-panel">
+            <h2>Joint values</h2>
+            <div id="joint-values" class="joint-values">Waiting for robot...</div>
+          </div>
+
+          <div class="panel warning-panel">
+            <h2>Warnings</h2>
+            <ul id="warnings"></ul>
+          </div>
+        </div>
+      </section>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

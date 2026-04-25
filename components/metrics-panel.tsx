@@ -79,7 +79,7 @@ export function MetricsPanel() {
                     fontSize: 12,
                     borderRadius: 6,
                   }}
-                  formatter={(v: number) => `${Math.round(v * 100)}%`}
+                  formatter={(v) => `${Math.round(Number(v ?? 0) * 100)}%`}
                 />
                 <Area type="monotone" dataKey="successRate" stroke="hsl(var(--primary))" fill="url(#grad-succ)" />
               </AreaChart>
