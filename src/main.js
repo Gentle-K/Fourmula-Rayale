@@ -797,7 +797,7 @@ function updateHud() {
   sampleCountValue.textContent = String(app.recorder.getSamples().length);
   sceneHint.textContent = app.phase === "orbit"
     ? (app.issLoaded ? "ISS ready. Click / trigger ISS to enter training habitat." : "Loading ISS station model...")
-    : `In ${app.habitatModuleName}: use VR handles, telepoint movement, agent mode, recording, or CEM train step.`;
+    : `In ${app.habitatModuleName}: use VR arm/leg handles, telepoint movement, robotic walk agent mode, recording, or CEM train step.`;
 
   if (app.phase === "orbit") {
     jointValues.innerHTML = '<span class="empty">Orbit view active. Select the ISS to enter the training habitat.</span>';
