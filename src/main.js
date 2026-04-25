@@ -40,6 +40,7 @@ const app = {
   issPickTargets: [],
   habitatModuleName: "JPM",
   habitatModuleRoot: null,
+  habitatMetrics: null,
   teleportController: null,
   teleportRig: null,
   teleportPlane: null,
@@ -306,6 +307,7 @@ function loadRobot() {
 function prepareRobotRoot(root) {
   root.position.set(0, 0, 0);
   root.rotation.set(0, 0, 0);
+  root.scale.setScalar(1);
   root.traverse((object) => {
     if (object.isMesh || object.isSkinnedMesh) {
       object.castShadow = true;
@@ -314,19 +316,71 @@ function prepareRobotRoot(root) {
     if (object.isSkinnedMesh) object.frustumCulled = false;
   });
 
+  placeRobotInHabitat();
+}
+
+function placeRobotInHabitat() {
+  const root = app.robotRoot;
+  if (!root) return;
+
+  root.position.set(0, 0, 0);
+  root.rotation.set(0, 0, 0);
+  root.scale.setScalar(1);
+  root.updateWorldMatrix(true, true);
+
+  const metrics = app.habitatMetrics ?? getFallbackHabitatMetrics();
   const box = new THREE.Box3().setFromObject(root);
   const size = new THREE.Vector3();
   box.getSize(size);
-  const max = Math.max(size.x, size.y, size.z);
-  if (max > 0 && Number.isFinite(max)) root.scale.setScalar(2.25 / max);
+  const naturalHeight = size.y > 0 ? size.y : Math.max(size.x, size.z);
+  const cabinHeight = metrics.size.y || 1.8;
+  const cabinDepth = metrics.size.z || metrics.teleportDepth || 1.8;
+  const targetHeight = THREE.MathUtils.clamp(
+    Math.min(cabinHeight * 0.68, cabinDepth * 0.82),
+    0.9,
+    1.58,
+  );
+  if (naturalHeight > 0 && Number.isFinite(naturalHeight)) root.scale.setScalar(targetHeight / naturalHeight);
 
   box.setFromObject(root);
   const center = new THREE.Vector3();
+  const scaledSize = new THREE.Vector3();
   box.getCenter(center);
-  root.position.x -= center.x;
-  root.position.z -= center.z;
-  root.position.x += 0.85;
-  root.position.y -= box.min.y;
+  box.getSize(scaledSize);
+
+  const marginX = Math.max(0.16, Math.min(0.28, metrics.teleportWidth * 0.16));
+  const marginZ = Math.max(0.16, Math.min(0.28, metrics.teleportDepth * 0.16));
+  const minX = metrics.center.x - metrics.teleportWidth * 0.5 + marginX;
+  const maxX = metrics.center.x + metrics.teleportWidth * 0.5 - marginX;
+  const minZ = metrics.center.z - metrics.teleportDepth * 0.5 + marginZ;
+  const maxZ = metrics.center.z + metrics.teleportDepth * 0.5 - marginZ;
+  const desiredX = clampBetween(metrics.center.x + metrics.teleportWidth * 0.24, minX, maxX);
+  const desiredZ = clampBetween(metrics.center.z + metrics.teleportDepth * 0.22, minZ, maxZ);
+  const floorY = metrics.floorY ?? 0;
+
+  root.position.x += desiredX - center.x;
+  root.position.z += desiredZ - center.z;
+  root.position.y += floorY + 0.02 - box.min.y;
+  root.userData.habitatTargetHeight = targetHeight;
+  root.userData.habitatFloorY = floorY;
+  root.updateWorldMatrix(true, true);
+
+  if (app.phase === "habitat") frameHabitatCamera();
+}
+
+function getFallbackHabitatMetrics() {
+  return {
+    center: new THREE.Vector3(0, 0, 0),
+    size: new THREE.Vector3(5.2, 2.1, 5.2),
+    floorY: 0,
+    teleportWidth: 4.8,
+    teleportDepth: 4.8,
+  };
+}
+
+function clampBetween(value, min, max) {
+  if (min > max) return (min + max) * 0.5;
+  return THREE.MathUtils.clamp(value, min, max);
 }
 
 function buildHabitatModule(stationRoot) {
@@ -369,13 +423,14 @@ function buildHabitatModule(stationRoot) {
   if (app.debugSurfaceGroup) app.debugSurfaceGroup.visible = false;
   createTeleportZoneForModule(moduleClone);
   addHabitatLights();
+  placeRobotInHabitat();
   updateHud();
 }
 
 function prepareHabitatMaterial(material) {
   const next = material.clone();
   next.transparent = true;
-  next.opacity = 0.58;
+  next.opacity = 0.36;
   next.depthWrite = false;
   next.side = THREE.DoubleSide;
   return next;
@@ -404,6 +459,14 @@ function createTeleportZoneForModule(moduleRoot) {
   plane.position.set(center.x, Math.max(0.04, box.min.y + 0.08), center.z);
   plane.visible = true;
   app.teleportPlane = plane;
+  app.habitatMetrics = {
+    box: box.clone(),
+    center: center.clone(),
+    size: size.clone(),
+    floorY: plane.position.y,
+    teleportWidth: width,
+    teleportDepth: depth,
+  };
   app.habitatGroup.add(plane);
   app.teleportController?.setTeleportPlane(plane);
 }
@@ -551,12 +614,39 @@ function setPhase(phase) {
     controls.target.set(0, 1.15, 0);
     app.selectedJoint = null;
   } else {
-    camera.position.set(4.0, 2.15, 4.6);
-    controls.target.set(0.85, 1.05, 0);
+    frameHabitatCamera();
   }
   controls.update();
   console.log("Current phase:", phase);
   updateHud();
+}
+
+function getHabitatFocusPoint() {
+  const metrics = app.habitatMetrics ?? getFallbackHabitatMetrics();
+  if (!app.robotRoot) {
+    return new THREE.Vector3(metrics.center.x, (metrics.floorY ?? 0) + 0.9, metrics.center.z);
+  }
+
+  const box = new THREE.Box3().setFromObject(app.robotRoot);
+  const center = new THREE.Vector3();
+  const size = new THREE.Vector3();
+  box.getCenter(center);
+  box.getSize(size);
+  return new THREE.Vector3(center.x, (metrics.floorY ?? box.min.y) + size.y * 0.56, center.z);
+}
+
+function frameHabitatCamera() {
+  const metrics = app.habitatMetrics ?? getFallbackHabitatMetrics();
+  const focus = getHabitatFocusPoint();
+  const viewTarget = focus.clone();
+  const sideOffset = THREE.MathUtils.clamp(metrics.teleportWidth * 0.58, 1.8, 2.85);
+  const depthOffset = THREE.MathUtils.clamp(metrics.teleportDepth * 0.86, 2.35, 3.75);
+  const eyeY = Math.max(focus.y + 0.78, (metrics.floorY ?? 0) + 1.45);
+
+  viewTarget.x -= THREE.MathUtils.clamp(metrics.teleportWidth * 0.5, 0.68, 1.05);
+  controls.target.copy(viewTarget);
+  camera.position.set(focus.x + sideOffset, eyeY, focus.z + depthOffset);
+  controls.update();
 }
 
 function printObjectAndBoneDebug(root) {
