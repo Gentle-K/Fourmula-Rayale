@@ -9,3 +9,7 @@ dist/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# Root-level source model copies are kept locally only.
+/doctor.glb
+/iss_interiorinternational_space_station.glb

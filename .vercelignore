@@ -1,0 +1,14 @@
+node_modules
+.next
+dist
+.git
+.env*
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.DS_Store
+
+# Local source model duplicates; runtime assets live in public/models.
+doctor.glb
+iss_interiorinternational_space_station.glb
