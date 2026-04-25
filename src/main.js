@@ -21,6 +21,20 @@ const HABITAT_MAX_SIZE = 10.4;
 const HABITAT_MIN_TELEPORT_WIDTH = 2.8;
 const HABITAT_MIN_TELEPORT_DEPTH = 2.8;
 const HABITAT_TELEPORT_ZONE_RATIO = 0.72;
+const DEFAULT_ROBOT_POSE = {
+  yawDeg: THREE.MathUtils.radToDeg(ROBOT_HABITAT_YAW),
+  offsetX: 0,
+  offsetZ: 0,
+  floorOffset: ROBOT_FLOOR_CLEARANCE,
+  scaleMultiplier: 1,
+};
+const ROOT_CONTROL_DEFS = [
+  { key: "yawDeg", label: "Yaw", min: -180, max: 180, step: 1, unit: "deg" },
+  { key: "offsetX", label: "Body X", min: -1.2, max: 1.2, step: 0.01, unit: "m" },
+  { key: "offsetZ", label: "Body Z", min: -1.2, max: 1.2, step: 0.01, unit: "m" },
+  { key: "floorOffset", label: "Foot Y", min: -0.18, max: 0.35, step: 0.01, unit: "m" },
+  { key: "scaleMultiplier", label: "Scale", min: 0.65, max: 1.35, step: 0.01, unit: "x" },
+];
 
 const canvas = document.querySelector("#xr-canvas");
 const phaseValue = document.querySelector("#phase-value");
@@ -33,6 +47,9 @@ const trainBestValue = document.querySelector("#train-best");
 const jointValues = document.querySelector("#joint-values");
 const sceneHint = document.querySelector("#scene-hint");
 const warningsList = document.querySelector("#warnings");
+const rootControls = document.querySelector("#root-controls");
+const jointControls = document.querySelector("#joint-controls");
+const poseResetButton = document.querySelector("#pose-reset");
 
 const app = {
   phase: "orbit",
@@ -53,6 +70,7 @@ const app = {
   teleportPlane: null,
   robotRoot: null,
   robotController: null,
+  robotPose: { ...DEFAULT_ROBOT_POSE },
   vrInteractor: null,
   recorder: new DemoRecorder(),
   agentPolicy: new SimpleAgentPolicy(),
@@ -99,6 +117,7 @@ loadStation();
 loadRobot();
 bindKeyboard();
 bindOrbitPointer();
+poseResetButton?.addEventListener("click", resetPoseTuning);
 checkWebXRSupport();
 
 const clock = new THREE.Clock();
@@ -296,6 +315,7 @@ function loadRobot() {
       });
       if (app.teleportPlane) app.teleportController.setTeleportPlane(app.teleportPlane);
       app.cemTrainer = new CEMTrainer(app.robotController, app.measures);
+      buildPoseTuningControls();
 
       if (app.robotController.missingBones.size > 0) {
         addWarning(`Missing expected bones: ${[...app.robotController.missingBones].join(", ")}. Edit BONE_MAP in RobotJointController.js.`);
@@ -313,7 +333,7 @@ function loadRobot() {
 
 function prepareRobotRoot(root) {
   root.position.set(0, 0, 0);
-  root.rotation.set(0, ROBOT_HABITAT_YAW, 0);
+  root.rotation.set(0, getRobotYawRadians(), 0);
   root.scale.setScalar(1);
   root.traverse((object) => {
     if (object.isMesh || object.isSkinnedMesh) {
@@ -326,12 +346,13 @@ function prepareRobotRoot(root) {
   placeRobotInHabitat();
 }
 
-function placeRobotInHabitat() {
+function placeRobotInHabitat({ frameCamera = true } = {}) {
   const root = app.robotRoot;
   if (!root) return;
 
+  const pose = app.robotPose;
   root.position.set(0, 0, 0);
-  root.rotation.set(0, ROBOT_HABITAT_YAW, 0);
+  root.rotation.set(0, getRobotYawRadians(), 0);
   root.scale.setScalar(1);
   root.updateWorldMatrix(true, true);
 
@@ -347,7 +368,12 @@ function placeRobotInHabitat() {
     0.9,
     1.58,
   );
-  if (naturalHeight > 0 && Number.isFinite(naturalHeight)) root.scale.setScalar(targetHeight / naturalHeight);
+  const tunedTargetHeight = THREE.MathUtils.clamp(
+    targetHeight * pose.scaleMultiplier,
+    0.55,
+    Math.max(0.65, cabinHeight * 0.82),
+  );
+  if (naturalHeight > 0 && Number.isFinite(naturalHeight)) root.scale.setScalar(tunedTargetHeight / naturalHeight);
 
   box.setFromObject(root);
   const center = new THREE.Vector3();
@@ -361,19 +387,23 @@ function placeRobotInHabitat() {
   const maxX = metrics.center.x + metrics.teleportWidth * 0.5 - marginX;
   const minZ = metrics.center.z - metrics.teleportDepth * 0.5 + marginZ;
   const maxZ = metrics.center.z + metrics.teleportDepth * 0.5 - marginZ;
-  const desiredX = clampBetween(metrics.center.x + metrics.teleportWidth * 0.24, minX, maxX);
-  const desiredZ = clampBetween(metrics.center.z + metrics.teleportDepth * 0.22, minZ, maxZ);
+  const desiredX = clampBetween(metrics.center.x + metrics.teleportWidth * 0.24 + pose.offsetX, minX, maxX);
+  const desiredZ = clampBetween(metrics.center.z + metrics.teleportDepth * 0.22 + pose.offsetZ, minZ, maxZ);
   const floorY = metrics.floorY ?? 0;
 
   root.position.x += desiredX - center.x;
   root.position.z += desiredZ - center.z;
-  root.position.y += floorY + ROBOT_FLOOR_CLEARANCE - box.min.y;
-  root.userData.habitatTargetHeight = targetHeight;
+  root.position.y += floorY + pose.floorOffset - box.min.y;
+  root.userData.habitatTargetHeight = tunedTargetHeight;
   root.userData.habitatFloorY = floorY;
-  root.userData.habitatYaw = ROBOT_HABITAT_YAW;
+  root.userData.habitatYawDeg = pose.yawDeg;
   root.updateWorldMatrix(true, true);
 
-  if (app.phase === "habitat") frameHabitatCamera();
+  if (frameCamera && app.phase === "habitat") frameHabitatCamera();
+}
+
+function getRobotYawRadians() {
+  return THREE.MathUtils.degToRad(app.robotPose.yawDeg);
 }
 
 function getFallbackHabitatMetrics() {
@@ -732,6 +762,7 @@ function bindKeyboard() {
     if (key === "r") {
       app.robotController?.reset();
       app.agentPolicy.reset();
+      buildPoseTuningControls();
       console.log("Robot joints reset.");
     }
     if (key === "p") console.log("Current observation:", app.robotController?.getObservation() ?? null);
@@ -752,6 +783,128 @@ function runTrainStep() {
   }
   const result = app.cemTrainer.step();
   trainBestValue.textContent = result.best.toFixed(2);
+}
+
+function buildPoseTuningControls() {
+  if (!rootControls || !jointControls) return;
+
+  rootControls.innerHTML = "";
+  for (const def of ROOT_CONTROL_DEFS) {
+    rootControls.appendChild(createRangeControl({
+      label: def.label,
+      dataType: "root",
+      dataKey: def.key,
+      min: def.min,
+      max: def.max,
+      step: def.step,
+      value: app.robotPose[def.key],
+      unit: def.unit,
+      onInput: (value) => {
+        enterManualForTuning();
+        app.robotPose[def.key] = value;
+        placeRobotInHabitat({ frameCamera: false });
+      },
+    }));
+  }
+
+  if (!app.robotController) {
+    jointControls.textContent = "Waiting for robot...";
+    return;
+  }
+
+  jointControls.innerHTML = "";
+  for (const joint of app.robotController.getJointDefinitions()) {
+    const row = createRangeControl({
+      label: joint.jointName,
+      dataType: "joint",
+      dataKey: joint.jointName,
+      min: joint.min,
+      max: joint.max,
+      step: 1,
+      value: joint.target,
+      unit: "deg",
+      disabled: !joint.bone,
+      onInput: (value) => {
+        enterManualForTuning();
+        app.selectedJoint = joint.jointName;
+        selectedJointValue.textContent = joint.jointName;
+        app.robotController?.setJointTarget(joint.jointName, value);
+      },
+    });
+    jointControls.appendChild(row);
+  }
+}
+
+function createRangeControl({ label, dataType, dataKey, min, max, step, value, unit, disabled = false, onInput }) {
+  const row = document.createElement("div");
+  row.className = "control-row";
+
+  const id = `control-${label.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`;
+  const labelEl = document.createElement("label");
+  labelEl.htmlFor = id;
+  labelEl.textContent = label;
+
+  const input = document.createElement("input");
+  input.id = id;
+  input.type = "range";
+  input.dataset.tuningType = dataType;
+  input.dataset.tuningKey = dataKey;
+  input.min = String(min);
+  input.max = String(max);
+  input.step = String(step);
+  input.value = String(value);
+  input.disabled = disabled;
+
+  const output = document.createElement("output");
+  output.textContent = formatControlValue(value, unit);
+
+  input.addEventListener("input", () => {
+    const nextValue = Number(input.value);
+    output.textContent = formatControlValue(nextValue, unit);
+    onInput?.(nextValue);
+  });
+
+  row.append(labelEl, input, output);
+  return row;
+}
+
+function formatControlValue(value, unit) {
+  if (unit === "m") return `${Number(value).toFixed(2)}m`;
+  if (unit === "x") return `${Number(value).toFixed(2)}x`;
+  return `${Number(value).toFixed(0)}deg`;
+}
+
+function enterManualForTuning() {
+  if (app.mode === "agent" || app.mode === "train") setMode("manual");
+}
+
+function resetPoseTuning() {
+  app.robotPose = { ...DEFAULT_ROBOT_POSE };
+  app.robotController?.reset();
+  app.agentPolicy.reset();
+  placeRobotInHabitat({ frameCamera: true });
+  buildPoseTuningControls();
+  updateHud();
+}
+
+function syncPoseTuningControls() {
+  const inputs = document.querySelectorAll("[data-tuning-type]");
+  for (const input of inputs) {
+    if (input === document.activeElement) continue;
+    let value = null;
+    const type = input.dataset.tuningType;
+    const key = input.dataset.tuningKey;
+    if (type === "root") {
+      value = app.robotPose[key];
+    } else if (type === "joint") {
+      value = app.robotController?.joints.get(key)?.target;
+    }
+    if (value === null || value === undefined) continue;
+    if (Number(input.value) !== Number(value)) input.value = String(value);
+    const unit = type === "root" ? ROOT_CONTROL_DEFS.find((def) => def.key === key)?.unit : "deg";
+    const output = input.nextElementSibling;
+    if (output) output.textContent = formatControlValue(value, unit);
+  }
 }
 
 function render() {
@@ -798,6 +951,7 @@ function updateHud() {
   sceneHint.textContent = app.phase === "orbit"
     ? (app.issLoaded ? "ISS ready. Click / trigger ISS to enter training habitat." : "Loading ISS station model...")
     : `In ${app.habitatModuleName}: use VR arm/leg handles, telepoint movement, robotic walk agent mode, recording, or CEM train step.`;
+  syncPoseTuningControls();
 
   if (app.phase === "orbit") {
     jointValues.innerHTML = '<span class="empty">Orbit view active. Select the ISS to enter the training habitat.</span>';

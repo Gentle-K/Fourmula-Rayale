@@ -65,6 +65,7 @@ body {
 
 h1,
 h2,
+h3,
 p {
   margin: 0;
 }
@@ -79,6 +80,14 @@ h2 {
   color: #f8fafc;
   font-size: 12px;
   letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+h3 {
+  margin: 10px 0 6px;
+  color: #bae6fd;
+  font-size: 11px;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
@@ -112,6 +121,82 @@ h2 {
   color: #cbd5e1;
   font-size: 12px;
   line-height: 1.55;
+}
+
+.editor-panel {
+  pointer-events: auto;
+}
+
+.panel-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.panel-title-row h2 {
+  margin-bottom: 0;
+}
+
+.small-button {
+  border: 1px solid rgba(34, 211, 238, 0.5);
+  border-radius: 6px;
+  padding: 4px 8px;
+  color: #cffafe;
+  background: rgba(14, 116, 144, 0.32);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.small-button:hover,
+.small-button:focus-visible {
+  border-color: rgba(103, 232, 249, 0.95);
+  outline: none;
+}
+
+.editor-note {
+  margin-bottom: 4px;
+  color: #94a3b8 !important;
+}
+
+.control-stack {
+  display: grid;
+  gap: 7px;
+}
+
+.control-row {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr) 48px;
+  align-items: center;
+  gap: 8px;
+  color: #dbeafe;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+}
+
+.control-row label {
+  overflow: hidden;
+  color: #cbd5e1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.control-row output {
+  color: #f8fafc;
+  text-align: right;
+}
+
+.control-row input[type="range"] {
+  width: 100%;
+  accent-color: #22d3ee;
+  cursor: pointer;
+}
+
+.control-row input:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
 }
 
 .scene-hint {

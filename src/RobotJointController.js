@@ -35,10 +35,10 @@ export const DEFAULT_JOINT_DEFS = [
   { jointName: "right_elbow", boneName: BONE_MAP.rightForearm, axis: [1, 0, 0], min: -105, max: 8, speed: 560 },
   { jointName: "right_hand", boneName: BONE_MAP.rightHand, axis: [0, 0, 1], min: -32, max: 32, speed: 520 },
   { jointName: "left_hip", boneName: BONE_MAP.leftThigh, axis: [1, 0, 0], min: -42, max: 42, speed: 560 },
-  { jointName: "left_knee", boneName: BONE_MAP.leftShin, axis: [1, 0, 0], min: -4, max: 72, speed: 620 },
+  { jointName: "left_knee", boneName: BONE_MAP.leftShin, axis: [-1, 0, 0], min: -4, max: 72, speed: 620 },
   { jointName: "left_ankle", boneName: BONE_MAP.leftFoot, axis: [1, 0, 0], min: -26, max: 26, speed: 560 },
   { jointName: "right_hip", boneName: BONE_MAP.rightThigh, axis: [1, 0, 0], min: -42, max: 42, speed: 560 },
-  { jointName: "right_knee", boneName: BONE_MAP.rightShin, axis: [1, 0, 0], min: -4, max: 72, speed: 620 },
+  { jointName: "right_knee", boneName: BONE_MAP.rightShin, axis: [-1, 0, 0], min: -4, max: 72, speed: 620 },
   { jointName: "right_ankle", boneName: BONE_MAP.rightFoot, axis: [1, 0, 0], min: -26, max: 26, speed: 560 },
 ];
 
