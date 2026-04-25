@@ -34,7 +34,7 @@ type TaskStatusResponse = {
 }
 
 function getKey() {
-  const k = process.env.TRIPO_API_KEY
+  const k = process.env.TRIPO_API_KEY?.trim()
   if (!k) throw new Error("TRIPO_API_KEY not set")
   return k
 }
