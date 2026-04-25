@@ -12,3 +12,4 @@ yarn-error.log*
 # Local source model duplicates; runtime assets live in public/models.
 doctor.glb
 iss_interiorinternational_space_station.glb
+shadow-coach-xr-api-agent-tripo

@@ -7,6 +7,7 @@ export class VRTeleportController {
     playerRig,
     controllers = [],
     jointInteractor = null,
+    objectManipulator = null,
     options = {},
   }) {
     this.scene = scene;
@@ -14,6 +15,7 @@ export class VRTeleportController {
     this.playerRig = playerRig;
     this.controllers = controllers;
     this.jointInteractor = jointInteractor;
+    this.objectManipulator = objectManipulator;
     this.enabled = options.enabled ?? false;
     this.rayLength = options.rayLength ?? 8;
     this.teleportPlane = null;
@@ -21,11 +23,14 @@ export class VRTeleportController {
     this.tempOrigin = new THREE.Vector3();
     this.tempDirection = new THREE.Vector3();
     this.tempCameraWorld = new THREE.Vector3();
+    this.controllerListeners = [];
     this.reticle = this.createReticle();
     this.scene.add(this.reticle);
 
     for (const controller of this.controllers) {
-      controller.addEventListener("selectstart", () => this.onSelectStart(controller));
+      const selectStart = () => this.onSelectStart(controller);
+      controller.addEventListener("selectstart", selectStart);
+      this.controllerListeners.push({ controller, selectStart });
     }
   }
 
@@ -67,6 +72,7 @@ export class VRTeleportController {
   onSelectStart(controller) {
     if (!this.enabled) return;
     if (this.jointInteractor?.getHandleHit(controller)) return;
+    if (this.objectManipulator?.getObjectHit(controller)) return;
 
     const hit = this.getTeleportHit(controller);
     if (!hit) return;
@@ -100,5 +106,15 @@ export class VRTeleportController {
 
   reset() {
     this.reticle.visible = false;
+  }
+
+  dispose() {
+    for (const { controller, selectStart } of this.controllerListeners) {
+      controller.removeEventListener("selectstart", selectStart);
+    }
+    this.controllerListeners = [];
+    this.reticle.geometry.dispose();
+    this.reticle.material.dispose();
+    this.reticle.removeFromParent();
   }
 }

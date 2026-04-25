@@ -31,6 +31,7 @@ export class VRJointInteractor {
     this.handles = [];
     this.controllers = [];
     this.controllerGrips = [];
+    this.controllerListeners = [];
     this.enabled = options.enabled ?? true;
     this.selected = null;
     this.raycaster = new THREE.Raycaster();
@@ -87,8 +88,11 @@ export class VRJointInteractor {
       const controller = this.renderer.xr.getController(i);
       controller.name = `xr_controller_${i}`;
       controller.add(this.createRayLine());
-      controller.addEventListener("selectstart", (event) => this.onSelectStart(event, controller));
-      controller.addEventListener("selectend", () => this.onSelectEnd(controller));
+      const selectStart = (event) => this.onSelectStart(event, controller);
+      const selectEnd = () => this.onSelectEnd(controller);
+      controller.addEventListener("selectstart", selectStart);
+      controller.addEventListener("selectend", selectEnd);
+      this.controllerListeners.push({ controller, selectStart, selectEnd });
       this.controllerParent.add(controller);
       this.controllers.push(controller);
 
@@ -178,6 +182,18 @@ export class VRJointInteractor {
     this.handles = [];
 
     for (const controller of this.controllers) {
+      const listeners = this.controllerListeners.find((item) => item.controller === controller);
+      if (listeners) {
+        controller.removeEventListener("selectstart", listeners.selectStart);
+        controller.removeEventListener("selectend", listeners.selectEnd);
+      }
+      for (const child of [...controller.children]) {
+        if (child.name === "controller_ray") {
+          child.geometry?.dispose?.();
+          child.material?.dispose?.();
+          child.removeFromParent();
+        }
+      }
       controller.removeFromParent();
     }
     for (const grip of this.controllerGrips) {
@@ -185,5 +201,6 @@ export class VRJointInteractor {
     }
     this.defaultMaterial.dispose();
     this.selectedMaterial.dispose();
+    this.controllerListeners = [];
   }
 }

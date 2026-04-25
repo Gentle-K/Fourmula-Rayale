@@ -10,6 +10,16 @@ import { DemoRecorder } from "./DemoRecorder.js";
 import { Measures } from "./Measures.js";
 import { CEMTrainer } from "./CEMTrainer.js";
 import { VRTeleportController } from "./VRTeleportController.js";
+import { TripoGenerationClient } from "./tripo/TripoGenerationClient.js";
+import { GeneratedAssetManager } from "./tripo/GeneratedAssetManager.js";
+import { AssetPostProcessor } from "./tripo/AssetPostProcessor.js";
+import { SceneObjectPipeline } from "./tripo/SceneObjectPipeline.js";
+import { RobotReplacementPipeline } from "./tripo/RobotReplacementPipeline.js";
+import { RigValidator } from "./tripo/RigValidation.js";
+import { BoneMappingManager } from "./tripo/BoneMappingManager.js";
+import { RobotSwapManager } from "./tripo/RobotSwapManager.js";
+import { XRObjectManipulator } from "./tripo/XRObjectManipulator.js";
+import { classifyAssetIntent } from "./tripo/AssetIntentClassifier.js";
 
 const ASSET_VERSION = "20260425-vercel-assets";
 const ROBOT_MODEL_URL = `/models/doctor.glb?v=${ASSET_VERSION}`;
@@ -50,6 +60,16 @@ const warningsList = document.querySelector("#warnings");
 const rootControls = document.querySelector("#root-controls");
 const jointControls = document.querySelector("#joint-controls");
 const poseResetButton = document.querySelector("#pose-reset");
+const tripoPrompt = document.querySelector("#tripo-prompt");
+const tripoKind = document.querySelector("#tripo-kind");
+const tripoGenerateButton = document.querySelector("#tripo-generate");
+const tripoFileInput = document.querySelector("#tripo-file");
+const tripoVoiceButton = document.querySelector("#tripo-voice");
+const tripoStatusValue = document.querySelector("#tripo-status");
+const tripoAssetsList = document.querySelector("#tripo-assets");
+const objectControls = document.querySelector("#object-controls");
+const selectedObjectValue = document.querySelector("#selected-object");
+const latestTaskValue = document.querySelector("#latest-task");
 
 const app = {
   phase: "orbit",
@@ -66,12 +86,24 @@ const app = {
   habitatModuleRoot: null,
   habitatMetrics: null,
   teleportController: null,
+  xrObjectManipulator: null,
   teleportRig: null,
   teleportPlane: null,
   robotRoot: null,
   robotController: null,
   robotPose: { ...DEFAULT_ROBOT_POSE },
+  currentRobotBoneMap: null,
   vrInteractor: null,
+  generatedObjectPickTargets: [],
+  selectedSceneObject: null,
+  tripoClient: new TripoGenerationClient(),
+  generatedAssetManager: new GeneratedAssetManager(),
+  assetPostProcessor: new AssetPostProcessor(),
+  sceneObjectPipeline: null,
+  robotReplacementPipeline: null,
+  robotSwapManager: null,
+  tripoBusy: false,
+  tripoStatus: "idle",
   recorder: new DemoRecorder(),
   agentPolicy: new SimpleAgentPolicy(),
   measures: new Measures(),
@@ -115,9 +147,12 @@ setupScene();
 setPhase("orbit");
 loadStation();
 loadRobot();
+setupTripoPipelines();
 bindKeyboard();
 bindOrbitPointer();
 poseResetButton?.addEventListener("click", resetPoseTuning);
+tripoGenerateButton?.addEventListener("click", () => runTripoGeneration());
+tripoVoiceButton?.addEventListener("click", startVoicePrompt);
 checkWebXRSupport();
 
 const clock = new THREE.Clock();
@@ -239,6 +274,130 @@ async function checkWebXRSupport() {
   if (!supported) addWarning("Immersive VR is not available here. Use a WebXR-compatible HTTPS browser for Quest testing.");
 }
 
+function setupTripoPipelines() {
+  app.robotSwapManager = new RobotSwapManager({
+    onPauseAgent: () => {
+      app.robotSwapPreviousMode = app.mode;
+      if (app.mode === "agent" || app.mode === "train") setMode("manual");
+    },
+    onResumeAgent: () => {
+      if (app.robotSwapPreviousMode === "agent") setMode("agent");
+    },
+    onSwapRobot: ({ robotRoot, boneMap, validation, assetRecord }) => swapCurrentRobot({ robotRoot, boneMap, validation, assetRecord }),
+  });
+
+  app.sceneObjectPipeline = new SceneObjectPipeline({
+    client: app.tripoClient,
+    assetManager: app.generatedAssetManager,
+    postProcessor: app.assetPostProcessor,
+    onInsertObject: insertGeneratedSceneObject,
+    onStatus: setTripoStatus,
+  });
+
+  app.robotReplacementPipeline = new RobotReplacementPipeline({
+    client: app.tripoClient,
+    assetManager: app.generatedAssetManager,
+    rigValidator: new RigValidator(),
+    boneMappingManager: new BoneMappingManager(),
+    robotSwapManager: app.robotSwapManager,
+    onStatus: setTripoStatus,
+    onManualMappingRequired: (mapping) => {
+      addWarning(`Robot bone mapping needs manual edit. Missing: ${mapping.missingBones.join(", ")}. Available bones are printed in console.`);
+      console.log("Bone mapping candidates:", mapping);
+    },
+  });
+
+  setTripoStatus("idle");
+  renderTripoAssetList();
+  buildSelectedObjectControls();
+}
+
+async function runTripoGeneration() {
+  if (app.tripoBusy) return;
+  const rawInput = tripoPrompt?.value?.trim() ?? "";
+  const explicitKind = tripoKind?.value && tripoKind.value !== "auto" ? tripoKind.value : null;
+  if (!rawInput && !tripoFileInput?.files?.[0]) {
+    setTripoStatus("Enter a prompt or choose an image first.");
+    return;
+  }
+
+  app.tripoBusy = true;
+  if (tripoGenerateButton) tripoGenerateButton.disabled = true;
+  setTripoStatus("Preparing Tripo request.");
+  try {
+    const imagePayload = await getSelectedImagePayload();
+    const inputType = imagePayload ? (tripoFileInput?.files?.[0]?.name?.toLowerCase().includes("plan") ? "floor_plan" : "image") : "text";
+    const intent = classifyAssetIntent({ rawInput, explicitKind: explicitKind || "auto", inputType });
+    const payload = {
+      rawInput,
+      inputType,
+      explicitKind: intent.assetKind,
+      ...imagePayload,
+    };
+
+    if (intent.assetKind === "scene_layout") {
+      setTripoStatus("Scene layout parsing is scaffolded in v1. Generate concrete props or robot replacements from the layout suggestions.");
+      app.generatedAssetManager.createAssetRecord({
+        assetKind: "scene_layout",
+        requiresRig: false,
+        rawInput,
+        inputType,
+        status: "layout_scaffold",
+      });
+    } else if (intent.assetKind === "robot_replacement") {
+      await app.robotReplacementPipeline.generateRobotReplacement(payload);
+    } else {
+      await app.sceneObjectPipeline.generateSceneObject(payload);
+    }
+    tripoFileInput.value = "";
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Tripo generation failed.";
+    setTripoStatus(message);
+    addWarning(`${message} Use npx vercel dev for local API testing and set TRIPO_API_KEY on the server.`);
+  } finally {
+    app.tripoBusy = false;
+    if (tripoGenerateButton) tripoGenerateButton.disabled = false;
+    renderTripoAssetList();
+    updateHud();
+  }
+}
+
+function getSelectedImagePayload() {
+  const file = tripoFileInput?.files?.[0];
+  if (!file) return Promise.resolve(null);
+  if (!file.type.startsWith("image/")) throw new Error("Tripo reference upload must be an image file.");
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => resolve({ imageBase64: String(reader.result), imageMime: file.type }));
+    reader.addEventListener("error", () => reject(new Error("Failed to read reference image.")));
+    reader.readAsDataURL(file);
+  });
+}
+
+function startVoicePrompt() {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    setTripoStatus("Voice input is not available in this browser.");
+    return;
+  }
+  const recognition = new SpeechRecognition();
+  recognition.lang = "en-US";
+  recognition.interimResults = false;
+  recognition.addEventListener("result", (event) => {
+    const text = event.results?.[0]?.[0]?.transcript;
+    if (text && tripoPrompt) tripoPrompt.value = text;
+    setTripoStatus(text ? "Voice prompt captured." : "No speech recognized.");
+  });
+  recognition.addEventListener("error", () => setTripoStatus("Voice prompt failed."));
+  recognition.start();
+  setTripoStatus("Listening for a Tripo prompt.");
+}
+
+function setTripoStatus(message) {
+  app.tripoStatus = message;
+  if (tripoStatusValue) tripoStatusValue.textContent = message;
+}
+
 function loadStation() {
   const loader = new GLTFLoader();
   loader.load(
@@ -286,36 +445,7 @@ function loadRobot() {
       app.habitatGroup.add(app.robotRoot);
 
       printObjectAndBoneDebug(app.robotRoot);
-
-      app.robotController = new RobotJointController(app.robotRoot);
-      app.vrInteractor = new VRJointInteractor({
-        renderer,
-        scene,
-        camera,
-        robotController: app.robotController,
-        options: {
-          controllerParent: app.teleportRig,
-        },
-        onSelectedJointChange: (jointName) => {
-          app.selectedJoint = jointName;
-          selectedJointValue.textContent = jointName ?? "none";
-        },
-      });
-      app.vrInteractor.setEnabled(app.phase === "habitat");
-      bindOrbitControllerSelection();
-      app.teleportController = new VRTeleportController({
-        scene,
-        camera,
-        playerRig: app.teleportRig,
-        controllers: app.vrInteractor.controllers,
-        jointInteractor: app.vrInteractor,
-        options: {
-          enabled: app.phase === "habitat",
-        },
-      });
-      if (app.teleportPlane) app.teleportController.setTeleportPlane(app.teleportPlane);
-      app.cemTrainer = new CEMTrainer(app.robotController, app.measures);
-      buildPoseTuningControls();
+      initializeRobotControlStack();
 
       if (app.robotController.missingBones.size > 0) {
         addWarning(`Missing expected bones: ${[...app.robotController.missingBones].join(", ")}. Edit BONE_MAP in RobotJointController.js.`);
@@ -329,6 +459,155 @@ function loadRobot() {
       createMissingRobotPlaceholder();
     },
   );
+}
+
+function initializeRobotControlStack({ boneMap = null } = {}) {
+  cleanupRobotInteractions();
+  app.currentRobotBoneMap = boneMap;
+  app.robotController = new RobotJointController(app.robotRoot, boneMap ? { boneMap } : {});
+  app.vrInteractor = new VRJointInteractor({
+    renderer,
+    scene,
+    camera,
+    robotController: app.robotController,
+    options: {
+      controllerParent: app.teleportRig,
+    },
+    onSelectedJointChange: (jointName) => {
+      app.selectedJoint = jointName;
+      selectedJointValue.textContent = jointName ?? "none";
+    },
+  });
+  app.vrInteractor.setEnabled(app.phase === "habitat");
+  bindOrbitControllerSelection();
+  app.xrObjectManipulator = new XRObjectManipulator({
+    controllers: app.vrInteractor.controllers,
+    jointInteractor: app.vrInteractor,
+    pickTargetsProvider: () => app.generatedObjectPickTargets,
+    enabled: app.phase === "habitat",
+    onSelectionChange: (sceneObject) => {
+      selectSceneObject(sceneObject?.objectId ?? null);
+    },
+    onTransform: (root) => {
+      updateSceneObjectTransform(root);
+      buildSelectedObjectControls();
+    },
+  });
+  app.teleportController = new VRTeleportController({
+    scene,
+    camera,
+    playerRig: app.teleportRig,
+    controllers: app.vrInteractor.controllers,
+    jointInteractor: app.vrInteractor,
+    objectManipulator: app.xrObjectManipulator,
+    options: {
+      enabled: app.phase === "habitat",
+    },
+  });
+  if (app.teleportPlane) app.teleportController.setTeleportPlane(app.teleportPlane);
+  app.cemTrainer = new CEMTrainer(app.robotController, app.measures);
+  buildPoseTuningControls();
+}
+
+function cleanupRobotInteractions() {
+  app.teleportController?.dispose?.();
+  app.xrObjectManipulator?.dispose?.();
+  app.vrInteractor?.dispose?.();
+  app.teleportController = null;
+  app.xrObjectManipulator = null;
+  app.vrInteractor = null;
+}
+
+function insertGeneratedSceneObject(processed, context = {}) {
+  const root = processed.root;
+  const metadata = processed.metadata;
+  const placement = getSceneObjectPlacement(processed.colliderSize);
+  root.position.copy(placement.position);
+  root.rotation.set(0, placement.yaw, 0);
+  root.scale.setScalar(1);
+
+  const sceneObject = app.generatedAssetManager.registerSceneObject({
+    ...metadata,
+    assetId: context.assetId,
+    taskId: context.taskId,
+    prompt: context.prompt,
+    transform: getTransformRecord(root),
+    root,
+  });
+  root.userData.sceneObjectRecord = sceneObject;
+  root.traverse((object) => {
+    object.userData.sceneObjectId = sceneObject.objectId;
+    object.userData.sceneObjectRoot = root;
+  });
+  app.habitatGroup.add(root);
+  app.generatedObjectPickTargets.push(processed.collider);
+  const task = app.generatedAssetManager.createTaskFromSceneObject(sceneObject);
+  sceneObject.taskId = task.taskId;
+  app.generatedAssetManager.updateSceneObject(sceneObject.objectId, { taskId: task.taskId });
+  selectSceneObject(sceneObject.objectId);
+  renderTripoAssetList();
+  buildSelectedObjectControls();
+  updateHud();
+  return sceneObject;
+}
+
+function getSceneObjectPlacement(colliderSize = new THREE.Vector3(0.4, 0.4, 0.4)) {
+  const metrics = app.habitatMetrics ?? getFallbackHabitatMetrics();
+  const floorY = metrics.floorY ?? 0;
+  const height = colliderSize.y || 0.4;
+  const cameraWorld = new THREE.Vector3();
+  const forward = new THREE.Vector3();
+  camera.getWorldPosition(cameraWorld);
+  camera.getWorldDirection(forward);
+  forward.y = 0;
+  if (forward.lengthSq() < 0.001) forward.set(0, 0, -1);
+  forward.normalize();
+
+  const desired = cameraWorld.clone().addScaledVector(forward, 1.25);
+  const margin = 0.22;
+  desired.x = clampBetween(desired.x, metrics.center.x - metrics.teleportWidth * 0.5 + margin, metrics.center.x + metrics.teleportWidth * 0.5 - margin);
+  desired.z = clampBetween(desired.z, metrics.center.z - metrics.teleportDepth * 0.5 + margin, metrics.center.z + metrics.teleportDepth * 0.5 - margin);
+  desired.y = floorY + height * 0.5 + 0.04;
+  return { position: desired, yaw: Math.atan2(forward.x, forward.z) };
+}
+
+async function swapCurrentRobot({ robotRoot, boneMap, validation, assetRecord }) {
+  cleanupRobotInteractions();
+  if (app.robotRoot) app.robotRoot.removeFromParent();
+  app.robotRoot = robotRoot;
+  app.robotLoaded = true;
+  app.robotRoot.name = assetRecord?.assetId ? `TripoRobot_${assetRecord.assetId}` : "TripoRobotRoot";
+  prepareRobotRoot(app.robotRoot);
+  app.habitatGroup.add(app.robotRoot);
+  printObjectAndBoneDebug(app.robotRoot);
+  console.log("Rig validation:", validation);
+  initializeRobotControlStack({ boneMap });
+  placeRobotInHabitat({ frameCamera: true });
+  updateHud();
+  return { ok: true };
+}
+
+function selectSceneObject(objectId) {
+  app.selectedSceneObject = objectId ? app.generatedAssetManager.sceneObjects.get(objectId) ?? null : null;
+  if (selectedObjectValue) selectedObjectValue.textContent = app.selectedSceneObject?.displayName || app.selectedSceneObject?.semanticClass || "none";
+  buildSelectedObjectControls();
+}
+
+function updateSceneObjectTransform(root) {
+  const record = root?.userData?.sceneObjectRecord;
+  if (!record) return;
+  const transform = getTransformRecord(root);
+  app.generatedAssetManager.updateSceneObject(record.objectId, { transform });
+  root.userData.sceneObjectRecord = app.generatedAssetManager.sceneObjects.get(record.objectId);
+  if (app.selectedSceneObject?.objectId === record.objectId) app.selectedSceneObject = root.userData.sceneObjectRecord;
+}
+
+function getTransformRecord(root) {
+  return {
+    position: root.position.toArray().map((value) => Number(value.toFixed(3))),
+    rotation: [0, Number(THREE.MathUtils.radToDeg(root.rotation.y).toFixed(1)), 0],
+    scale: root.scale.toArray().map((value) => Number(value.toFixed(3))),
+  };
 }
 
 function prepareRobotRoot(root) {
@@ -615,14 +894,21 @@ function createStationPlaceholder() {
 
 function bindOrbitPointer() {
   renderer.domElement.addEventListener("pointerdown", (event) => {
-    if (app.phase !== "orbit") return;
     const rect = renderer.domElement.getBoundingClientRect();
     pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
     pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
     raycaster.setFromCamera(pointer, camera);
     raycaster.far = 40;
-    const hit = raycaster.intersectObjects(app.issPickTargets, true)[0];
-    if (hit) enterHabitat();
+    if (app.phase === "orbit") {
+      const hit = raycaster.intersectObjects(app.issPickTargets, true)[0];
+      if (hit) enterHabitat();
+      return;
+    }
+    if (app.phase === "habitat") {
+      const hit = raycaster.intersectObjects(app.generatedObjectPickTargets, true)[0];
+      const objectId = hit?.object?.userData?.sceneObjectId;
+      if (objectId) selectSceneObject(objectId);
+    }
   });
 }
 
@@ -656,6 +942,7 @@ function setPhase(phase) {
   if (app.orbitGroup) app.orbitGroup.visible = phase === "orbit";
   if (app.habitatGroup) app.habitatGroup.visible = phase === "habitat";
   app.vrInteractor?.setEnabled(phase === "habitat");
+  app.xrObjectManipulator?.setEnabled(phase === "habitat");
   app.teleportController?.setEnabled(phase === "habitat");
   app.teleportController?.reset();
   app.teleportRig?.position.set(0, 0, 0);
@@ -835,6 +1122,70 @@ function buildPoseTuningControls() {
   }
 }
 
+function buildSelectedObjectControls() {
+  if (!objectControls) return;
+  const sceneObject = app.selectedSceneObject;
+  const root = sceneObject?.root;
+  if (!sceneObject || !root) {
+    objectControls.innerHTML = '<span class="empty">Select a generated object to edit placement.</span>';
+    return;
+  }
+
+  const metrics = app.habitatMetrics ?? getFallbackHabitatMetrics();
+  const defs = [
+    { key: "x", label: "Obj X", min: metrics.center.x - metrics.teleportWidth * 0.5, max: metrics.center.x + metrics.teleportWidth * 0.5, step: 0.01, value: root.position.x, unit: "m" },
+    { key: "y", label: "Obj Y", min: metrics.floorY, max: metrics.floorY + Math.max(2, metrics.size.y), step: 0.01, value: root.position.y, unit: "m" },
+    { key: "z", label: "Obj Z", min: metrics.center.z - metrics.teleportDepth * 0.5, max: metrics.center.z + metrics.teleportDepth * 0.5, step: 0.01, value: root.position.z, unit: "m" },
+    { key: "yaw", label: "Obj yaw", min: -180, max: 180, step: 1, value: THREE.MathUtils.radToDeg(root.rotation.y), unit: "deg" },
+    { key: "scale", label: "Obj scale", min: 0.25, max: 2, step: 0.01, value: root.scale.x, unit: "x" },
+  ];
+
+  objectControls.innerHTML = "";
+  for (const def of defs) {
+    objectControls.appendChild(createRangeControl({
+      label: def.label,
+      dataType: "scene-object",
+      dataKey: def.key,
+      min: def.min,
+      max: def.max,
+      step: def.step,
+      value: def.value,
+      unit: def.unit,
+      onInput: (value) => {
+        if (def.key === "x") root.position.x = value;
+        if (def.key === "y") root.position.y = value;
+        if (def.key === "z") root.position.z = value;
+        if (def.key === "yaw") root.rotation.y = THREE.MathUtils.degToRad(value);
+        if (def.key === "scale") root.scale.setScalar(value);
+        updateSceneObjectTransform(root);
+      },
+    }));
+  }
+}
+
+function renderTripoAssetList() {
+  if (!tripoAssetsList) return;
+  const assets = app.generatedAssetManager.getAssetList();
+  if (assets.length === 0) {
+    tripoAssetsList.innerHTML = '<span class="empty">No generated assets yet.</span>';
+    return;
+  }
+  tripoAssetsList.innerHTML = assets.slice(0, 5).map((asset) => {
+    const label = asset.assetKind === "robot_replacement" ? "robot" : asset.semanticClass || asset.assetKind;
+    const status = asset.status || "created";
+    return `<button class="asset-row" type="button" data-asset-id="${asset.assetId}">
+      <span>${label}</span>
+      <strong>${status}</strong>
+    </button>`;
+  }).join("");
+  for (const button of tripoAssetsList.querySelectorAll("[data-asset-id]")) {
+    button.addEventListener("click", () => {
+      const asset = app.generatedAssetManager.assets.get(button.dataset.assetId);
+      if (asset?.objectId) selectSceneObject(asset.objectId);
+    });
+  }
+}
+
 function createRangeControl({ label, dataType, dataKey, min, max, step, value, unit, disabled = false, onInput }) {
   const row = document.createElement("div");
   row.className = "control-row";
@@ -911,6 +1262,7 @@ function render() {
   const dt = Math.min(clock.getDelta(), 0.1);
   controls.update();
   if (app.phase === "habitat") app.teleportController?.update();
+  if (app.phase === "habitat") app.xrObjectManipulator?.update();
 
   if (app.phase === "habitat" && app.robotController) {
     const observation = app.robotController.getObservation();
@@ -947,6 +1299,9 @@ function updateHud() {
   modeValue.textContent = app.mode;
   modePill.textContent = app.phase === "orbit" ? "orbit" : app.mode;
   selectedJointValue.textContent = app.selectedJoint ?? "none";
+  if (selectedObjectValue) selectedObjectValue.textContent = app.selectedSceneObject?.displayName || app.selectedSceneObject?.semanticClass || "none";
+  if (latestTaskValue) latestTaskValue.textContent = app.generatedAssetManager.getLatestTask()?.type ?? "none";
+  if (tripoStatusValue) tripoStatusValue.textContent = app.tripoStatus;
   sampleCountValue.textContent = String(app.recorder.getSamples().length);
   sceneHint.textContent = app.phase === "orbit"
     ? (app.issLoaded ? "ISS ready. Click / trigger ISS to enter training habitat." : "Loading ISS station model...")
