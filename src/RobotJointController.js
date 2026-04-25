@@ -23,17 +23,23 @@ export const BONE_MAP = {
   rightFoot: "mixamorig_RightFoot",
 };
 
-const DEFAULT_SPEED_DEG = 180;
+const DEFAULT_SPEED_DEG = 520;
 
 export const DEFAULT_JOINT_DEFS = [
-  { jointName: "head_yaw", boneName: BONE_MAP.head, axis: [0, 1, 0], min: -60, max: 60 },
-  { jointName: "head_pitch", boneName: BONE_MAP.head, axis: [1, 0, 0], min: -30, max: 30 },
-  { jointName: "left_shoulder", boneName: BONE_MAP.leftUpperArm, axis: [1, 0, 0], min: -90, max: 90 },
-  { jointName: "left_elbow", boneName: BONE_MAP.leftForearm, axis: [1, 0, 0], min: -120, max: 20 },
-  { jointName: "left_hand", boneName: BONE_MAP.leftHand, axis: [0, 0, 1], min: -45, max: 45 },
-  { jointName: "right_shoulder", boneName: BONE_MAP.rightUpperArm, axis: [1, 0, 0], min: -90, max: 90 },
-  { jointName: "right_elbow", boneName: BONE_MAP.rightForearm, axis: [1, 0, 0], min: -120, max: 20 },
-  { jointName: "right_hand", boneName: BONE_MAP.rightHand, axis: [0, 0, 1], min: -45, max: 45 },
+  { jointName: "head_yaw", boneName: BONE_MAP.head, axis: [0, 1, 0], min: -45, max: 45, speed: 360 },
+  { jointName: "head_pitch", boneName: BONE_MAP.head, axis: [1, 0, 0], min: -22, max: 22, speed: 360 },
+  { jointName: "left_shoulder", boneName: BONE_MAP.leftUpperArm, axis: [1, 0, 0], min: -85, max: 85, speed: 540 },
+  { jointName: "left_elbow", boneName: BONE_MAP.leftForearm, axis: [1, 0, 0], min: -105, max: 8, speed: 560 },
+  { jointName: "left_hand", boneName: BONE_MAP.leftHand, axis: [0, 0, 1], min: -32, max: 32, speed: 520 },
+  { jointName: "right_shoulder", boneName: BONE_MAP.rightUpperArm, axis: [1, 0, 0], min: -85, max: 85, speed: 540 },
+  { jointName: "right_elbow", boneName: BONE_MAP.rightForearm, axis: [1, 0, 0], min: -105, max: 8, speed: 560 },
+  { jointName: "right_hand", boneName: BONE_MAP.rightHand, axis: [0, 0, 1], min: -32, max: 32, speed: 520 },
+  { jointName: "left_hip", boneName: BONE_MAP.leftThigh, axis: [1, 0, 0], min: -42, max: 42, speed: 560 },
+  { jointName: "left_knee", boneName: BONE_MAP.leftShin, axis: [1, 0, 0], min: -4, max: 72, speed: 620 },
+  { jointName: "left_ankle", boneName: BONE_MAP.leftFoot, axis: [1, 0, 0], min: -26, max: 26, speed: 560 },
+  { jointName: "right_hip", boneName: BONE_MAP.rightThigh, axis: [1, 0, 0], min: -42, max: 42, speed: 560 },
+  { jointName: "right_knee", boneName: BONE_MAP.rightShin, axis: [1, 0, 0], min: -4, max: 72, speed: 620 },
+  { jointName: "right_ankle", boneName: BONE_MAP.rightFoot, axis: [1, 0, 0], min: -26, max: 26, speed: 560 },
 ];
 
 function clamp(value, min, max) {

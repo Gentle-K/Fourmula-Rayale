@@ -3,6 +3,7 @@ import { ParameterizedPolicy } from "./AgentPolicy.js";
 const PARAM_KEYS = [
   "headAmp",
   "headFreq",
+  "gaitFreq",
   "leftShoulderBase",
   "leftShoulderAmp",
   "leftElbowBase",
@@ -11,11 +12,16 @@ const PARAM_KEYS = [
   "rightShoulderAmp",
   "rightElbowBase",
   "rightElbowAmp",
+  "hipAmp",
+  "kneeBase",
+  "kneeAmp",
+  "ankleAmp",
 ];
 
 const DEFAULT_MEAN = {
   headAmp: 28,
   headFreq: 1,
+  gaitFreq: 1.1,
   leftShoulderBase: -20,
   leftShoulderAmp: 35,
   leftElbowBase: -50,
@@ -24,11 +30,16 @@ const DEFAULT_MEAN = {
   rightShoulderAmp: 35,
   rightElbowBase: -50,
   rightElbowAmp: 30,
+  hipAmp: 28,
+  kneeBase: 22,
+  kneeAmp: 28,
+  ankleAmp: 14,
 };
 
 const DEFAULT_STD = {
   headAmp: 12,
   headFreq: 0.35,
+  gaitFreq: 0.22,
   leftShoulderBase: 20,
   leftShoulderAmp: 18,
   leftElbowBase: 20,
@@ -37,6 +48,10 @@ const DEFAULT_STD = {
   rightShoulderAmp: 18,
   rightElbowBase: 20,
   rightElbowAmp: 18,
+  hipAmp: 10,
+  kneeBase: 8,
+  kneeAmp: 12,
+  ankleAmp: 6,
 };
 
 function gaussian() {
@@ -72,6 +87,11 @@ export class CEMTrainer {
       theta[key] = this.mean[key] + gaussian() * this.std[key];
     }
     theta.headFreq = Math.max(0.1, theta.headFreq);
+    theta.gaitFreq = Math.max(0.4, theta.gaitFreq);
+    theta.hipAmp = Math.max(8, Math.min(38, theta.hipAmp));
+    theta.kneeBase = Math.max(4, Math.min(40, theta.kneeBase));
+    theta.kneeAmp = Math.max(6, Math.min(42, theta.kneeAmp));
+    theta.ankleAmp = Math.max(4, Math.min(22, theta.ankleAmp));
     return theta;
   }
 
@@ -96,7 +116,10 @@ export class CEMTrainer {
 
       reachScore +=
         Math.abs(action.left_shoulder - action.right_shoulder) * 0.005 +
-        Math.abs(action.left_elbow + action.right_elbow) * 0.003;
+        Math.abs(action.left_elbow + action.right_elbow) * 0.003 +
+        Math.abs((action.left_hip ?? 0) - (action.right_hip ?? 0)) * 0.006 +
+        Math.max(0, action.left_knee ?? 0) * 0.004 +
+        Math.max(0, action.right_knee ?? 0) * 0.004;
     }
 
     const score = this.measures.computeScore({

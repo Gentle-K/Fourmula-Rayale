@@ -14,6 +14,13 @@ import { VRTeleportController } from "./VRTeleportController.js";
 const ASSET_VERSION = "20260425-vercel-assets";
 const ROBOT_MODEL_URL = `/models/doctor.glb?v=${ASSET_VERSION}`;
 const STATION_MODEL_URL = `/models/iss_interiorinternational_space_station.glb?v=${ASSET_VERSION}`;
+const ROBOT_HABITAT_YAW = Math.PI / 2;
+const ROBOT_FLOOR_CLEARANCE = 0.02;
+const HABITAT_BASE_MAX_SIZE = 5.8;
+const HABITAT_MAX_SIZE = 10.4;
+const HABITAT_MIN_TELEPORT_WIDTH = 2.8;
+const HABITAT_MIN_TELEPORT_DEPTH = 2.8;
+const HABITAT_TELEPORT_ZONE_RATIO = 0.72;
 
 const canvas = document.querySelector("#xr-canvas");
 const phaseValue = document.querySelector("#phase-value");
@@ -306,7 +313,7 @@ function loadRobot() {
 
 function prepareRobotRoot(root) {
   root.position.set(0, 0, 0);
-  root.rotation.set(0, 0, 0);
+  root.rotation.set(0, ROBOT_HABITAT_YAW, 0);
   root.scale.setScalar(1);
   root.traverse((object) => {
     if (object.isMesh || object.isSkinnedMesh) {
@@ -324,7 +331,7 @@ function placeRobotInHabitat() {
   if (!root) return;
 
   root.position.set(0, 0, 0);
-  root.rotation.set(0, 0, 0);
+  root.rotation.set(0, ROBOT_HABITAT_YAW, 0);
   root.scale.setScalar(1);
   root.updateWorldMatrix(true, true);
 
@@ -360,9 +367,10 @@ function placeRobotInHabitat() {
 
   root.position.x += desiredX - center.x;
   root.position.z += desiredZ - center.z;
-  root.position.y += floorY + 0.02 - box.min.y;
+  root.position.y += floorY + ROBOT_FLOOR_CLEARANCE - box.min.y;
   root.userData.habitatTargetHeight = targetHeight;
   root.userData.habitatFloorY = floorY;
+  root.userData.habitatYaw = ROBOT_HABITAT_YAW;
   root.updateWorldMatrix(true, true);
 
   if (app.phase === "habitat") frameHabitatCamera();
@@ -410,7 +418,20 @@ function buildHabitatModule(stationRoot) {
   const size = new THREE.Vector3();
   box.getSize(size);
   const max = Math.max(size.x, size.y, size.z);
-  if (max > 0 && Number.isFinite(max)) moduleClone.scale.setScalar(5.8 / max);
+  if (max > 0 && Number.isFinite(max)) {
+    const baseScale = HABITAT_BASE_MAX_SIZE / max;
+    const baseTeleportWidth = size.x * baseScale * HABITAT_TELEPORT_ZONE_RATIO;
+    const baseTeleportDepth = size.z * baseScale * HABITAT_TELEPORT_ZONE_RATIO;
+    const expandForWidth = baseTeleportWidth > 0 ? HABITAT_MIN_TELEPORT_WIDTH / baseTeleportWidth : 1;
+    const expandForDepth = baseTeleportDepth > 0 ? HABITAT_MIN_TELEPORT_DEPTH / baseTeleportDepth : 1;
+    const targetMax = THREE.MathUtils.clamp(
+      HABITAT_BASE_MAX_SIZE * Math.max(1, expandForWidth, expandForDepth),
+      HABITAT_BASE_MAX_SIZE,
+      HABITAT_MAX_SIZE,
+    );
+    moduleClone.scale.setScalar(targetMax / max);
+    moduleClone.userData.habitatTargetMaxSize = targetMax;
+  }
 
   box.setFromObject(moduleClone);
   const center = new THREE.Vector3();
@@ -430,7 +451,7 @@ function buildHabitatModule(stationRoot) {
 function prepareHabitatMaterial(material) {
   const next = material.clone();
   next.transparent = true;
-  next.opacity = 0.36;
+  next.opacity = 0.32;
   next.depthWrite = false;
   next.side = THREE.DoubleSide;
   return next;
@@ -443,8 +464,8 @@ function createTeleportZoneForModule(moduleRoot) {
   box.getSize(size);
   box.getCenter(center);
 
-  const width = Math.max(0.8, size.x * 0.7);
-  const depth = Math.max(1.4, size.z * 0.7);
+  const width = Math.max(HABITAT_MIN_TELEPORT_WIDTH, size.x * HABITAT_TELEPORT_ZONE_RATIO);
+  const depth = Math.max(HABITAT_MIN_TELEPORT_DEPTH, size.z * HABITAT_TELEPORT_ZONE_RATIO);
   const geometry = new THREE.PlaneGeometry(width, depth);
   const material = new THREE.MeshBasicMaterial({
     color: 0x22d3ee,
@@ -639,11 +660,11 @@ function frameHabitatCamera() {
   const metrics = app.habitatMetrics ?? getFallbackHabitatMetrics();
   const focus = getHabitatFocusPoint();
   const viewTarget = focus.clone();
-  const sideOffset = THREE.MathUtils.clamp(metrics.teleportWidth * 0.58, 1.8, 2.85);
-  const depthOffset = THREE.MathUtils.clamp(metrics.teleportDepth * 0.86, 2.35, 3.75);
+  const sideOffset = THREE.MathUtils.clamp(metrics.teleportWidth * 0.56, 2.35, 4.6);
+  const depthOffset = THREE.MathUtils.clamp(metrics.teleportDepth * 0.9, 3.1, 5.7);
   const eyeY = Math.max(focus.y + 0.78, (metrics.floorY ?? 0) + 1.45);
 
-  viewTarget.x -= THREE.MathUtils.clamp(metrics.teleportWidth * 0.5, 0.68, 1.05);
+  viewTarget.x -= THREE.MathUtils.clamp(metrics.teleportWidth * 0.38, 0.72, 1.65);
   controls.target.copy(viewTarget);
   camera.position.set(focus.x + sideOffset, eyeY, focus.z + depthOffset);
   controls.update();

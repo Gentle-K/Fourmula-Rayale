@@ -9,6 +9,12 @@ const DEFAULT_HANDLES = [
   { jointName: "right_shoulder", offset: [0, 0.06, 0] },
   { jointName: "right_elbow", offset: [0, 0.28, 0] },
   { jointName: "right_hand", offset: [0, 0.58, 0] },
+  { jointName: "left_hip", offset: [0, 0.08, 0] },
+  { jointName: "left_knee", offset: [0, 0.34, 0] },
+  { jointName: "left_ankle", offset: [0, 0.22, 0] },
+  { jointName: "right_hip", offset: [0, 0.08, 0] },
+  { jointName: "right_knee", offset: [0, 0.34, 0] },
+  { jointName: "right_ankle", offset: [0, 0.22, 0] },
 ];
 
 export class VRJointInteractor {
