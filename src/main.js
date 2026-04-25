@@ -11,8 +11,9 @@ import { Measures } from "./Measures.js";
 import { CEMTrainer } from "./CEMTrainer.js";
 import { VRTeleportController } from "./VRTeleportController.js";
 
-const ROBOT_MODEL_URL = "/models/doctor.glb";
-const STATION_MODEL_URL = "/models/iss_interiorinternational_space_station.glb";
+const ASSET_VERSION = "20260425-vercel-assets";
+const ROBOT_MODEL_URL = `/models/doctor.glb?v=${ASSET_VERSION}`;
+const STATION_MODEL_URL = `/models/iss_interiorinternational_space_station.glb?v=${ASSET_VERSION}`;
 
 const canvas = document.querySelector("#xr-canvas");
 const phaseValue = document.querySelector("#phase-value");
